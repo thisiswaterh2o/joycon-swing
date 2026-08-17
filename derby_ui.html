@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Home Run Derby</title>
+<link href="https://fonts.googleapis.com/css2?family=Teko:wght@500;600&family=Oswald:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  html, body { height:100%; margin:0; }
+  body { font-family:'Oswald', sans-serif; background:#12100C; color:#F5F1E8; width:100vw; height:100vh; max-width:none; padding:20px 24px; box-sizing:border-box; display:flex; flex-direction:column; }
+  button { cursor:pointer; font-family:'Oswald', sans-serif; text-transform:uppercase; letter-spacing:0.05em; font-size:13px; }
+  h2 { font-family:'Teko', sans-serif; font-weight:600; font-size:32px; letter-spacing:0.02em; text-transform:uppercase; color:#F5F1E8; margin:0 0 0.5rem; flex-shrink:0; }
+
+  .preset-btn { flex:1; padding:10px; background:#3E2723; color:#E8DCC8; border:1px solid #5C4033; border-radius:3px; }
+  .preset-btn.active { background:#0B3D2E; border-color:#639922; color:#EAF3DE; }
+
+  #status { font-size:12px; color:#8A7D6B; margin-top:8px; text-align:center; flex-shrink:0; }
+
+  body.fs-mode { padding:0; }
+  body.fs-mode #field-wrap { position:fixed; inset:0; width:100vw; height:100vh; border:none; border-radius:0; z-index:1; margin:0; }
+  body.fs-mode h2 { position:fixed; top:16px; left:20px; z-index:3; font-size:22px; margin:0; background:rgba(10,10,8,0.45); padding:4px 12px; border-radius:4px; }
+  body.fs-mode #controls-row { position:fixed; top:16px; right:20px; z-index:3; margin:0; background:rgba(10,10,8,0.45); padding:6px; border-radius:6px; width:auto; }
+  body.fs-mode #controls-row .preset-btn { padding:6px 10px; font-size:11px; }
+  body.fs-mode #status { position:fixed; top:70px; left:20px; z-index:3; background:rgba(10,10,8,0.45); padding:4px 12px; border-radius:4px; }
+  body.fs-mode #scoreboard { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); z-index:3; width:min(90vw,420px); background:rgba(11,10,8,0.78); }
+
+  #scoreboard { background:#0B0A08; border:3px solid #2C2C2A; border-radius:4px; padding:1.25rem 1rem; text-align:center; flex-shrink:0; }
+  #outcome-label { font-family:'Teko', sans-serif; font-size:20px; font-weight:600; letter-spacing:0.1em; margin-bottom:4px; color:#8A7D6B; text-transform:uppercase; }
+  #distance-readout { font-family:'Teko', sans-serif; font-size:56px; font-weight:600; letter-spacing:0.03em; color:#FAC775; text-shadow:0 0 12px rgba(250,199,117,0.4); line-height:1; }
+  #detail-label { font-size:11px; color:#6B6155; margin-top:8px; text-transform:uppercase; letter-spacing:0.04em; }
+
+  #field-wrap { position:relative; width:100%; flex:1 1 auto; min-height:200px; margin:0 0 1rem; border:3px solid #2C2C2A; border-radius:4px; overflow:hidden; background:#0A1128; }
+  #field-canvas { display:block; width:100%; height:100%; }
+</style>
+</head>
+<body>
+
+<h2>Home Run Derby</h2>
+
+<div style="display:flex; gap:8px; margin-bottom:1rem; flex-shrink:0;" id="controls-row">
+  <button class="preset-btn" id="btn-easy">Easy</button>
+  <button class="preset-btn" id="btn-medium">Medium</button>
+  <button class="preset-btn" id="btn-hard">Hard</button>
+  <button class="preset-btn" id="btn-sound" style="flex:0 0 140px;">Enable sound</button>
+  <button class="preset-btn" id="btn-fullscreen" style="flex:0 0 120px;">Fullscreen</button>
+</div>
+
+<div id="field-wrap">
+  <canvas id="field-canvas"></canvas>
+</div>
+
+<div id="status">Connecting to ws://localhost:8765 ...</div>
+
+<div id="scoreboard" style="margin-top:1rem;">
+  <div id="outcome-label">Ready</div>
+  <div id="distance-readout">---</div>
+  <div id="detail-label">tap ZR on the right joy-con to call for a pitch</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+var PRESETS = { easy:{speed:55, window:220}, medium:{speed:75, window:140}, hard:{speed:95, window:80} };
+var CALIB_FLOOR = 785;
+var CALIB_CEIL = 2433;
+var BASE_SPEED_MPH = 75;
+var BASE_IDEAL_CONTACT_MS = 1600;
+
+function effectiveIdealContactMs(speedMph){
+  return BASE_IDEAL_CONTACT_MS * (BASE_SPEED_MPH / speedMph);
+}
+
+var MOUND_Z = -18;
+var PLATE_Z = 0.6;
+var ZONE_CENTER_Y = 1.4;
+var ZONE_CELL = 0.19;
+
+var ZONES = [
+  {id:'tl', row:0, col:0, tier:'corner', windowMult:0.65, payoutMult:1.3},
+  {id:'tm', row:0, col:1, tier:'edge',   windowMult:1.0,  payoutMult:1.0},
+  {id:'tr', row:0, col:2, tier:'corner', windowMult:0.65, payoutMult:1.3},
+  {id:'ml', row:1, col:0, tier:'edge',   windowMult:1.0,  payoutMult:1.0},
+  {id:'cc', row:1, col:1, tier:'center', windowMult:1.3,  payoutMult:0.85},
+  {id:'mr', row:1, col:2, tier:'edge',   windowMult:1.0,  payoutMult:1.0},
+  {id:'bl', row:2, col:0, tier:'corner', windowMult:0.65, payoutMult:1.3},
+  {id:'bm', row:2, col:1, tier:'edge',   windowMult:1.0,  payoutMult:1.0},
+  {id:'br', row:2, col:2, tier:'corner', windowMult:0.65, payoutMult:1.3}
+];
+
+function zoneWorldPos(zone){
+  var x = (zone.col - 1) * ZONE_CELL;
+  var y = ZONE_CENTER_Y + (1 - zone.row) * ZONE_CELL;
+  return {x:x, y:y, z:PLATE_Z};
+}
+
+var state = { pitching:false, pitchStartLocal:0, currentZone:ZONES[4], preset:'medium', idealContactMs:BASE_IDEAL_CONTACT_MS, travelMs:BASE_IDEAL_CONTACT_MS*2 };
+
+var outcomeLabel = document.getElementById('outcome-label');
+var distanceReadout = document.getElementById('distance-readout');
+var detailLabel = document.getElementById('detail-label');
+var statusEl = document.getElementById('status');
+var btns = { easy:document.getElementById('btn-easy'), medium:document.getElementById('btn-medium'), hard:document.getElementById('btn-hard') };
+
+var canvas = document.getElementById('field-canvas');
+var fieldWrap = document.getElementById('field-wrap');
+var renderer = new THREE.WebGLRenderer({ canvas:canvas, antialias:true, alpha:false });
+var scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0A1128);
+scene.fog = new THREE.Fog(0x0A1128, 8, 24);
+
+var camera = new THREE.PerspectiveCamera(62, 1, 0.1, 100);
+camera.position.set(0, 1.6, 1.4);
+camera.lookAt(0, 1.25, MOUND_Z);
+
+function resizeRenderer(){
+  var w = fieldWrap.clientWidth, h = fieldWrap.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resizeRenderer);
+
+var ambient = new THREE.AmbientLight(0x8899BB, 0.55);
+scene.add(ambient);
+var stadiumLight = new THREE.DirectionalLight(0xFFF4DD, 0.9);
+stadiumLight.position.set(4, 10, 4);
+scene.add(stadiumLight);
+var rimLight = new THREE.DirectionalLight(0x6B8E4E, 0.3);
+rimLight.position.set(-4, 3, -10);
+scene.add(rimLight);
+
+var ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(40, 40),
+  new THREE.MeshStandardMaterial({ color:0x3F6B2A, roughness:0.95 })
+);
+ground.rotation.x = -Math.PI/2;
+ground.position.y = 0;
+scene.add(ground);
+
+var dirtPath = new THREE.Mesh(
+  new THREE.PlaneGeometry(3.2, Math.abs(MOUND_Z)+3),
+  new THREE.MeshStandardMaterial({ color:0x8B5A2B, roughness:1 })
+);
+dirtPath.rotation.x = -Math.PI/2;
+dirtPath.position.set(0, 0.005, MOUND_Z/2);
+scene.add(dirtPath);
+
+var mound = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.9, 1.1, 0.25, 20),
+  new THREE.MeshStandardMaterial({ color:0x7A4A22, roughness:1 })
+);
+mound.position.set(0, 0.12, MOUND_Z);
+scene.add(mound);
+
+var plate = new THREE.Mesh(
+  new THREE.CircleGeometry(0.22, 5),
+  new THREE.MeshStandardMaterial({ color:0xF5F1E8, roughness:0.6 })
+);
+plate.rotation.x = -Math.PI/2;
+plate.rotation.z = Math.PI;
+plate.position.set(0, 0.01, PLATE_Z + 0.3);
+scene.add(plate);
+
+var wall = new THREE.Mesh(
+  new THREE.PlaneGeometry(30, 3.2),
+  new THREE.MeshStandardMaterial({ color:0x0B3D2E, roughness:1 })
+);
+wall.position.set(0, 1.6, MOUND_Z - 6);
+scene.add(wall);
+
+// Depth reference stripes along the dirt path, fading with distance,
+// so the eye has a fixed grid to judge the ball's progress against.
+for (var i = 1; i < 8; i++){
+  var stripeZ = MOUND_Z + (PLATE_Z - MOUND_Z) * (i / 8);
+  var stripe = new THREE.Mesh(
+    new THREE.PlaneGeometry(3.0, 0.12),
+    new THREE.MeshBasicMaterial({ color:0xF5F1E8, transparent:true, opacity:0.12 })
+  );
+  stripe.rotation.x = -Math.PI/2;
+  stripe.position.set(0, 0.01, stripeZ);
+  scene.add(stripe);
+}
+
+var zoneCells = {};
+ZONES.forEach(function(z){
+  var pos = zoneWorldPos(z);
+  var geo = new THREE.PlaneGeometry(ZONE_CELL*0.92, ZONE_CELL*0.92);
+  var mat = new THREE.MeshBasicMaterial({ color:0xF5F1E8, transparent:true, opacity:0.06, side:THREE.DoubleSide });
+  var mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(pos.x, pos.y, pos.z);
+  scene.add(mesh);
+
+  var edges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(geo),
+    new THREE.LineBasicMaterial({ color:0xF5F1E8, transparent:true, opacity:0.35 })
+  );
+  edges.position.copy(mesh.position);
+  scene.add(edges);
+
+  zoneCells[z.id] = { mesh:mesh, edges:edges };
+});
+
+function baseballTexture(){
+  var c = document.createElement('canvas');
+  c.width = 128; c.height = 128;
+  var ctx = c.getContext('2d');
+  ctx.fillStyle = '#F5F1E8';
+  ctx.beginPath(); ctx.arc(64,64,62,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle = '#C1272D';
+  ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(24,14); ctx.quadraticCurveTo(64,64,24,114); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(104,14); ctx.quadraticCurveTo(64,64,104,114); ctx.stroke();
+  return new THREE.CanvasTexture(c);
+}
+var ballTex = baseballTexture();
+var ballGeo = new THREE.SphereGeometry(0.075, 20, 20);
+var ballMat = new THREE.MeshStandardMaterial({ map:ballTex, roughness:0.5 });
+var ball = new THREE.Mesh(ballGeo, ballMat);
+ball.visible = false;
+scene.add(ball);
+
+var hitBall = new THREE.Mesh(ballGeo.clone(), ballMat.clone());
+hitBall.visible = false;
+scene.add(hitBall);
+
+function render(){ renderer.render(scene, camera); }
+
+function pickZone(){
+  return ZONES[Math.floor(Math.random() * ZONES.length)];
+}
+
+function highlightZone(zone){
+  ZONES.forEach(function(z){
+    var isTarget = z.id === zone.id;
+    zoneCells[z.id].mesh.material.opacity = isTarget ? 0.18 : 0.06;
+    zoneCells[z.id].edges.material.color.set(isTarget ? 0xFAC775 : 0xF5F1E8);
+    zoneCells[z.id].edges.material.opacity = isTarget ? 0.9 : 0.3;
+  });
+  render();
+}
+
+function setPreset(name){
+  for (var k in btns){ btns[k].className = 'preset-btn' + (k===name ? ' active' : ''); }
+  state.preset = name;
+  var speedMph = PRESETS[name].speed;
+  state.idealContactMs = effectiveIdealContactMs(speedMph);
+  state.travelMs = state.idealContactMs * 2;
+  if (typeof ws !== 'undefined' && ws && ws.readyState === WebSocket.OPEN){
+    ws.send(JSON.stringify({type:'set_difficulty', speed_mph:speedMph}));
+  }
+}
+btns.easy.onclick = function(){ setPreset('easy'); };
+btns.medium.onclick = function(){ setPreset('medium'); };
+btns.hard.onclick = function(){ setPreset('hard'); };
+setPreset('medium');
+
+var audioCtx = null;
+var soundEnabled = false;
+document.getElementById('btn-sound').onclick = function(){
+  if (!audioCtx){ audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+  audioCtx.resume();
+  soundEnabled = !soundEnabled;
+  document.getElementById('btn-sound').textContent = soundEnabled ? 'Sound on' : 'Sound off';
+  document.getElementById('btn-sound').className = 'preset-btn' + (soundEnabled ? ' active' : '');
+};
+
+function noiseBuffer(durationSec){
+  var bufferSize = audioCtx.sampleRate * durationSec;
+  var buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+  var data = buffer.getChannelData(0);
+  for (var i = 0; i < bufferSize; i++){ data[i] = Math.random() * 2 - 1; }
+  return buffer;
+}
+
+function playContact(powerPct){
+  if (!soundEnabled || !audioCtx) return;
+  var src = audioCtx.createBufferSource();
+  src.buffer = noiseBuffer(0.25);
+  var filter = audioCtx.createBiquadFilter();
+  filter.type = 'bandpass';
+  filter.frequency.setValueAtTime(1800, audioCtx.currentTime);
+  filter.frequency.exponentialRampToValueAtTime(300, audioCtx.currentTime + 0.22);
+  filter.Q.value = 1.2;
+  var gain = audioCtx.createGain();
+  gain.gain.setValueAtTime(0.35, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.25);
+  src.connect(filter); filter.connect(gain); gain.connect(audioCtx.destination);
+  src.start();
+}
+
+function playWhiff(powerPct){
+  if (!soundEnabled || !audioCtx) return;
+  var power = Math.max(0, Math.min(1, powerPct / 100));
+  var src = audioCtx.createBufferSource();
+  src.buffer = noiseBuffer(0.08);
+  var filter = audioCtx.createBiquadFilter();
+  filter.type = 'bandpass';
+  filter.frequency.value = 800 + power * 2500;
+  filter.Q.value = 0.8;
+  var noiseGain = audioCtx.createGain();
+  noiseGain.gain.setValueAtTime(0.5 + power * 0.5, audioCtx.currentTime);
+  noiseGain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.09);
+  src.connect(filter); filter.connect(noiseGain); noiseGain.connect(audioCtx.destination);
+  src.start();
+
+  var osc = audioCtx.createOscillator();
+  osc.type = 'triangle';
+  osc.frequency.setValueAtTime(120 + power * 100, audioCtx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(50, audioCtx.currentTime + 0.15);
+  var oscGain = audioCtx.createGain();
+  oscGain.gain.setValueAtTime(0.4 + power * 0.4, audioCtx.currentTime);
+  oscGain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.18);
+  osc.connect(oscGain); oscGain.connect(audioCtx.destination);
+  osc.start(); osc.stop(audioCtx.currentTime + 0.2);
+}
+
+function normalizePower(peakGyro){
+  var span = CALIB_CEIL - CALIB_FLOOR;
+  var raw = (peakGyro - CALIB_FLOOR) / span;
+  return Math.max(0, Math.min(1, raw));
+}
+
+function scoreSwing(offsetMs, peakGyro, zone){
+  var baseWindow = PRESETS[state.preset].window;
+  var effectiveWindow = baseWindow * zone.windowMult;
+  var half = effectiveWindow / 2;
+  if (Math.abs(offsetMs) > half){
+    return {outcome:'WHIFF', distance:0, timingQ:0, power:null};
+  }
+  var timingQ = 1 - (Math.abs(offsetMs) / half);
+  var power = normalizePower(peakGyro);
+  var combined = power * (0.5 + 0.5*timingQ) * zone.payoutMult;
+  var distance = Math.round(100 + Math.min(1, combined)*380);
+  var tier;
+  if (timingQ > 0.85 && power > 0.8){ tier = 'SWEET SPOT'; }
+  else if (combined > 0.5){ tier = 'SOLID CONTACT'; }
+  else { tier = 'WEAK CONTACT'; }
+  return {outcome:tier, distance:distance, timingQ:Math.round(timingQ*100), power:Math.round(power*100)};
+}
+
+function ballPositionAt(elapsedMs, zone){
+  var target = zoneWorldPos(zone);
+  var pct = Math.max(0, Math.min(1, elapsedMs / state.idealContactMs));
+  var eased = pct * pct;
+  var x = 0 + (target.x - 0) * eased;
+  var y = 1.3 + (target.y - 1.3) * eased;
+  var z = MOUND_Z + (target.z - MOUND_Z) * eased;
+  return {x:x, y:y, z:z, visible: pct > 0.02};
+}
+
+function tickPitch(){
+  if (!state.pitching) return;
+  var elapsed = performance.now() - state.pitchStartLocal;
+  var pos = ballPositionAt(elapsed, state.currentZone);
+  ball.position.set(pos.x, pos.y, pos.z);
+  ball.visible = pos.visible;
+  ball.rotation.x += 0.3;
+  render();
+
+  if (elapsed < state.travelMs){
+    requestAnimationFrame(tickPitch);
+  } else {
+    state.pitching = false;
+    ball.visible = false;
+    render();
+  }
+}
+
+function playLaunchArc(power){
+  var target = zoneWorldPos(state.currentZone);
+  hitBall.position.set(target.x, target.y, target.z);
+  hitBall.visible = true;
+
+  var launchStart = performance.now();
+  var durationMs = 700 + power * 500;
+  var horizSpread = (Math.random() - 0.5) * 3;
+  var launchZDist = 8 + power * 20;
+
+  function tickLaunch(){
+    var t = (performance.now() - launchStart) / durationMs;
+    if (t >= 1){
+      hitBall.visible = false;
+      render();
+      return;
+    }
+    var x = target.x + horizSpread * t;
+    var arcHeight = 1.5 + power * 7;
+    var y = target.y + arcHeight * 4 * t * (1-t) + t * 0.5;
+    var z = target.z - launchZDist * t;
+    hitBall.position.set(x, y, z);
+    hitBall.rotation.x += 0.4;
+    render();
+    requestAnimationFrame(tickLaunch);
+  }
+  requestAnimationFrame(tickLaunch);
+}
+
+function showResult(peakGyro, offsetMs){
+  state.pitching = false;
+
+  var swingElapsedMs = (offsetMs === 999999) ? state.travelMs : (state.idealContactMs + offsetMs);
+  var pos = ballPositionAt(swingElapsedMs, state.currentZone);
+  ball.position.set(pos.x, pos.y, pos.z);
+  ball.visible = pos.visible;
+
+  var result = scoreSwing(offsetMs, peakGyro, state.currentZone);
+  outcomeLabel.textContent = result.outcome;
+  outcomeLabel.style.color = result.outcome === 'WHIFF' ? '#E24B4A' : (result.outcome === 'SWEET SPOT' ? '#8FBF5C' : '#8A7D6B');
+  var zoneNote = state.currentZone.tier + ' pitch';
+  if (result.outcome === 'WHIFF'){
+    distanceReadout.textContent = 'Whiff';
+    distanceReadout.style.color = '#E24B4A';
+    distanceReadout.style.textShadow = '0 0 12px rgba(226,75,74,0.4)';
+    detailLabel.textContent = (offsetMs > 0 ? 'swung too late' : 'swung too early') + ' — ' + zoneNote + ' (peak ' + Math.round(peakGyro) + ' dps)';
+    playWhiff(result.power || 0);
+    ball.visible = false;
+  } else {
+    distanceReadout.textContent = result.distance + ' ft';
+    distanceReadout.style.color = '#FAC775';
+    distanceReadout.style.textShadow = '0 0 12px rgba(250,199,117,0.4)';
+    detailLabel.textContent = zoneNote + ' — timing ' + result.timingQ + '%, power ' + result.power + '%, offset ' + Math.round(offsetMs) + 'ms';
+    playContact(result.power);
+    ball.visible = false;
+    playLaunchArc(result.power / 100);
+  }
+  render();
+}
+
+var ws = new WebSocket('ws://localhost:8765');
+ws.onopen = function(){
+  statusEl.textContent = 'Connected — tap ZR on the right joy-con to call for a pitch';
+  ws.send(JSON.stringify({type:'set_difficulty', speed_mph:PRESETS[state.preset].speed}));
+};
+ws.onclose = function(){ statusEl.textContent = 'Disconnected — is derby_bridge_server.py running?'; };
+ws.onerror = function(){ statusEl.textContent = 'Connection error — is derby_bridge_server.py running?'; };
+
+ws.onmessage = function(evt){
+  var msg = JSON.parse(evt.data);
+  if (msg.type === 'pitch_start'){
+    state.currentZone = pickZone();
+    highlightZone(state.currentZone);
+
+    state.pitching = true;
+    state.pitchStartLocal = performance.now();
+    ball.visible = false;
+    hitBall.visible = false;
+    outcomeLabel.textContent = 'Pitch incoming';
+    outcomeLabel.style.color = '#8A7D6B';
+    distanceReadout.textContent = '---';
+    distanceReadout.style.color = '#FAC775';
+    detailLabel.textContent = state.currentZone.tier + ' pitch — swing when ready';
+    requestAnimationFrame(tickPitch);
+  } else if (msg.type === 'result'){
+    if (msg.offset_ms === 999999){
+      showResult(0, 999999);
+    } else {
+      showResult(msg.peak_gyro, msg.offset_ms);
+    }
+  }
+};
+
+resizeRenderer();
+highlightZone(state.currentZone);
+render();
+
+document.getElementById('btn-fullscreen').onclick = function(){
+  if (!document.fullscreenElement){
+    document.documentElement.requestFullscreen().catch(function(){});
+  } else {
+    document.exitFullscreen();
+  }
+};
+document.addEventListener('fullscreenchange', function(){
+  document.body.classList.toggle('fs-mode', !!document.fullscreenElement);
+  setTimeout(function(){ resizeRenderer(); render(); }, 60);
+});
+</script>
+</body>
+</html>
