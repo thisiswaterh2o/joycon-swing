@@ -20,16 +20,26 @@
   body.fs-mode h2 { position:fixed; top:16px; left:20px; z-index:3; font-size:22px; margin:0; background:rgba(10,10,8,0.45); padding:4px 12px; border-radius:4px; }
   body.fs-mode #controls-row { position:fixed; top:16px; right:20px; z-index:3; margin:0; background:rgba(10,10,8,0.45); padding:6px; border-radius:6px; width:auto; }
   body.fs-mode #controls-row .preset-btn { padding:6px 10px; font-size:11px; }
-  body.fs-mode #status { position:fixed; top:70px; left:20px; z-index:3; background:rgba(10,10,8,0.45); padding:4px 12px; border-radius:4px; }
-  body.fs-mode #scoreboard { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); z-index:3; width:min(90vw,420px); background:rgba(11,10,8,0.78); }
+  body.fs-mode #status { position:fixed; top:104px; left:20px; z-index:3; background:rgba(10,10,8,0.45); padding:4px 12px; border-radius:4px; }
+  body.fs-mode #scoreboard { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); z-index:3; width:min(90vw,460px); background:rgba(11,10,8,0.78); }
+  body.fs-mode #leaderboard-panel { position:fixed; top:62px; left:20px; z-index:3; background:rgba(10,10,8,0.55); padding:4px 12px; border-radius:4px; margin:0; }
 
   #scoreboard { background:#0B0A08; border:3px solid #2C2C2A; border-radius:4px; padding:1.25rem 1rem; text-align:center; flex-shrink:0; }
   #outcome-label { font-family:'Teko', sans-serif; font-size:20px; font-weight:600; letter-spacing:0.1em; margin-bottom:4px; color:#8A7D6B; text-transform:uppercase; }
   #distance-readout { font-family:'Teko', sans-serif; font-size:56px; font-weight:600; letter-spacing:0.03em; color:#FAC775; text-shadow:0 0 12px rgba(250,199,117,0.4); line-height:1; }
   #detail-label { font-size:11px; color:#6B6155; margin-top:8px; text-transform:uppercase; letter-spacing:0.04em; }
 
-  #field-wrap { position:relative; width:100%; flex:1 1 auto; min-height:200px; margin:0 0 1rem; border:3px solid #2C2C2A; border-radius:4px; overflow:hidden; background:#0A1128; }
+  #field-wrap { position:relative; width:100%; flex:1 1 auto; min-height:200px; margin:0 0 1rem; border:3px solid #2C2C2A; border-radius:4px; overflow:hidden; background:#7FB3E0; }
   #field-canvas { display:block; width:100%; height:100%; }
+
+  #leaderboard-panel { font-size:11px; color:#B7AC98; margin-top:6px; flex-shrink:0; }
+  #leaderboard-panel b { color:#FAC775; }
+
+  #hud { position:absolute; left:14px; bottom:14px; z-index:4; display:flex; gap:14px; align-items:flex-end; pointer-events:none; }
+  .hud-block { background:rgba(9,9,7,0.62); border:1px solid rgba(250,199,117,0.28); border-radius:5px; padding:7px 9px; }
+  .hud-label { font-size:9.5px; letter-spacing:0.14em; text-transform:uppercase; color:#9C927F; margin-bottom:5px; }
+  #hud-zone, #hud-timing { display:block; }
+  #hud-timing-text { font-size:10px; letter-spacing:0.06em; text-transform:uppercase; color:#B7AC98; margin-top:4px; text-align:center; }
 </style>
 </head>
 <body>
@@ -40,13 +50,29 @@
   <button class="preset-btn" id="btn-easy">Easy</button>
   <button class="preset-btn" id="btn-medium">Medium</button>
   <button class="preset-btn" id="btn-hard">Hard</button>
-  <button class="preset-btn" id="btn-sound" style="flex:0 0 140px;">Enable sound</button>
-  <button class="preset-btn" id="btn-fullscreen" style="flex:0 0 120px;">Fullscreen</button>
+  <button class="preset-btn" id="btn-sound" style="flex:0 0 130px;">Enable sound</button>
+  <button class="preset-btn" id="btn-hand" style="flex:0 0 110px;">Bats: right</button>
+  <button class="preset-btn" id="btn-recenter" style="flex:0 0 110px;">Recenter bat</button>
+  <button class="preset-btn" id="btn-quality" style="flex:0 0 130px;">Quality: high</button>
+  <button class="preset-btn" id="btn-fullscreen" style="flex:0 0 110px;">Fullscreen</button>
 </div>
 
 <div id="field-wrap">
   <canvas id="field-canvas"></canvas>
+  <div id="hud">
+    <div class="hud-block">
+      <div class="hud-label">Pitch location</div>
+      <canvas id="hud-zone" width="132" height="132"></canvas>
+    </div>
+    <div class="hud-block">
+      <div class="hud-label">Swing timing</div>
+      <canvas id="hud-timing" width="230" height="56"></canvas>
+      <div id="hud-timing-text">—</div>
+    </div>
+  </div>
 </div>
+
+<div id="leaderboard-panel">Session best: <b id="session-best">---</b> &nbsp;|&nbsp; Home runs: <b id="session-hrs">0</b></div>
 
 <div id="status">Connecting to ws://localhost:8765 ...</div>
 
@@ -58,6 +84,9 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
+/* =========================================================================
+   DIFFICULTY / TIMING
+   ========================================================================= */
 var PRESETS = { easy:{speed:55, window:220}, medium:{speed:75, window:140}, hard:{speed:95, window:80} };
 var CALIB_FLOOR = 785;
 var CALIB_CEIL = 2433;
@@ -68,10 +97,32 @@ function effectiveIdealContactMs(speedMph){
   return BASE_IDEAL_CONTACT_MS * (BASE_SPEED_MPH / speedMph);
 }
 
-var MOUND_Z = -18;
-var PLATE_Z = 0.6;
-var ZONE_CENTER_Y = 1.4;
-var ZONE_CELL = 0.19;
+/* =========================================================================
+   SCENE SCALE — real feet.
+   ========================================================================= */
+var FT_PER_M = 3.28084;
+var M_PER_FT = 0.3048;
+
+var MOUND_Z = -60.5;
+var PLATE_Z = 1.5;
+/* Real MLB strike zone: 17in plate width plus a ball's width on each side
+   for the called zone (~1.42ft of plate, ~1.66ft effective), running from
+   roughly the hollow beneath the kneecap to the midpoint of the torso. */
+var ZONE_W_FT = 1.66;
+var ZONE_BOTTOM_FT = 1.60;
+var ZONE_TOP_FT = 3.42;
+var ZONE_H_FT = ZONE_TOP_FT - ZONE_BOTTOM_FT;
+var ZONE_CENTER_Y = (ZONE_TOP_FT + ZONE_BOTTOM_FT) / 2;
+var ZONE_CELL_W = ZONE_W_FT / 3;
+var ZONE_CELL_H = ZONE_H_FT / 3;
+
+/* Pitcher release: ~54ft from the plate (stride off the rubber), around
+   5.8ft up and offset to the arm side. */
+var RELEASE_Z = MOUND_Z + 6.5;
+var RELEASE_Y = 5.8;
+var RELEASE_X = -1.6;
+var BALL_RADIUS_FT = 0.121;
+var BASE_PATH_FT = 90;
 
 var ZONES = [
   {id:'tl', row:0, col:0, tier:'corner', windowMult:0.65, payoutMult:1.3},
@@ -86,29 +137,246 @@ var ZONES = [
 ];
 
 function zoneWorldPos(zone){
-  var x = (zone.col - 1) * ZONE_CELL;
-  var y = ZONE_CENTER_Y + (1 - zone.row) * ZONE_CELL;
+  var x = (zone.col - 1) * ZONE_CELL_W;
+  var y = ZONE_CENTER_Y + (1 - zone.row) * ZONE_CELL_H;
   return {x:x, y:y, z:PLATE_Z};
 }
 
-var state = { pitching:false, pitchStartLocal:0, currentZone:ZONES[4], preset:'medium', idealContactMs:BASE_IDEAL_CONTACT_MS, travelMs:BASE_IDEAL_CONTACT_MS*2 };
+/* Pick an actual point inside the chosen cell rather than always aiming at
+   its exact center — real pitches scatter within a target region, and this
+   makes the HUD's plotted location meaningful instead of a fixed 9 dots. */
+function zoneTargetPoint(zone){
+  var c = zoneWorldPos(zone);
+  return {
+    x: c.x + (Math.random() - 0.5) * ZONE_CELL_W * 0.72,
+    y: c.y + (Math.random() - 0.5) * ZONE_CELL_H * 0.72,
+    z: PLATE_Z
+  };
+}
+
+var state = { pitching:false, hitting:false, pitchStartLocal:0, currentZone:ZONES[4], preset:'medium',
+              idealContactMs:BASE_IDEAL_CONTACT_MS, travelMs:BASE_IDEAL_CONTACT_MS*2,
+              cameraMode:'batter', quality:'high',
+              pitchPlan:null, pitchTarget:null, windupMs:0 };
 
 var outcomeLabel = document.getElementById('outcome-label');
 var distanceReadout = document.getElementById('distance-readout');
 var detailLabel = document.getElementById('detail-label');
 var statusEl = document.getElementById('status');
+var sessionBestEl = document.getElementById('session-best');
+var sessionHrsEl = document.getElementById('session-hrs');
 var btns = { easy:document.getElementById('btn-easy'), medium:document.getElementById('btn-medium'), hard:document.getElementById('btn-hard') };
 
+var sessionBestFt = 0;
+var sessionHRs = 0;
+
+/* =========================================================================
+   OUTFIELD WALL CONTOUR
+   ========================================================================= */
+var FOUL_LINE_FT = 330;
+var CENTER_FT = 400;
+var WALL_HEIGHT_FT = 8;
+var WALL_ANGLE_RANGE = 45;
+
+function wallDistanceAtAngle(angleDeg){
+  var t = Math.max(-1, Math.min(1, angleDeg / WALL_ANGLE_RANGE));
+  var curve = 1 - Math.pow(Math.abs(t), 1.8);
+  return FOUL_LINE_FT + (CENTER_FT - FOUL_LINE_FT) * curve;
+}
+
+/* =========================================================================
+   PROJECTILE PHYSICS — flight (drag + Magnus), then ground bounces with
+   restitution + friction, then a rolling phase, plus wall caroms.
+   ========================================================================= */
+var GRAVITY = 9.81;
+var AIR_DENSITY = 1.225;
+var BALL_MASS_KG = 0.145;
+var BALL_RADIUS_M = 0.0369;
+var BALL_AREA = Math.PI * BALL_RADIUS_M * BALL_RADIUS_M;
+var DRAG_CD = 0.40;
+var CONTACT_HEIGHT_FT = 3.0;
+var DT = 0.01;
+
+// Bounce / roll tuning (grass)
+var COR_GROUND = 0.38;      // vertical restitution off turf
+var FRICTION_GROUND = 0.55; // horizontal scrub per bounce
+var COR_WALL = 0.40;        // carom off the outfield wall
+var ROLL_DECEL = 6.5;       // m/s^2 rolling deceleration through grass
+var MIN_BOUNCE_MS = 1.2;    // below this vertical speed, transition to roll
+
+function simulateTrajectory(exitVeloMph, launchAngleDeg, sprayAngleDeg, backspinRpm, contactHeightFt){
+  var h0 = (contactHeightFt === undefined) ? CONTACT_HEIGHT_FT : contactHeightFt;
+  var v0 = exitVeloMph * 0.44704;
+  var theta = launchAngleDeg * Math.PI / 180;
+  var phi = sprayAngleDeg * Math.PI / 180;
+
+  var vel = {
+    x: v0 * Math.cos(theta) * Math.sin(phi),
+    y: v0 * Math.sin(theta),
+    z: -v0 * Math.cos(theta) * Math.cos(phi)
+  };
+  var pos = { x:0, y: h0 * M_PER_FT, z:0 };
+  var omega = backspinRpm * 2 * Math.PI / 60;
+
+  var points = [{ t:0, x:0, y:h0, z:0 }];
+  var bounceEvents = [];
+  var t = 0;
+  var apexFt = h0;
+  var bounces = 0;
+  var rolling = false;
+  var flightEndIdx = null;
+  var carryFt = 0;
+  var hitWall = false;
+  var clearsWall = false;
+  var wallChecked = false;
+  var wallRadius = null;
+  var wallHitPoint = null;
+
+  for (var i = 0; i < 6000; i++){
+    var speed = Math.sqrt(vel.x*vel.x + vel.y*vel.y + vel.z*vel.z);
+    if (speed < 0.005) speed = 0.005;
+
+    if (!rolling){
+      var dragCoeff = 0.5 * AIR_DENSITY * DRAG_CD * BALL_AREA * speed / BALL_MASS_KG;
+      var ax = -dragCoeff * vel.x;
+      var ay = -dragCoeff * vel.y - GRAVITY;
+      var az = -dragCoeff * vel.z;
+      var spinFactor = (BALL_RADIUS_M * omega) / speed;
+      var liftCoeff = spinFactor > 0 ? 1 / (2 + 1/spinFactor) : 0;
+      var liftAccel = (0.5 * AIR_DENSITY * liftCoeff * BALL_AREA * speed * speed) / BALL_MASS_KG;
+      ay += liftAccel * 0.55;
+      vel.x += ax * DT; vel.y += ay * DT; vel.z += az * DT;
+    } else {
+      var hs = Math.sqrt(vel.x*vel.x + vel.z*vel.z);
+      if (hs > 0.01){
+        var ns = Math.max(0, hs - ROLL_DECEL * DT);
+        var k = ns / hs;
+        vel.x *= k; vel.z *= k;
+      }
+      vel.y = 0;
+    }
+
+    pos.x += vel.x * DT; pos.y += vel.y * DT; pos.z += vel.z * DT;
+    t += DT;
+
+    var xf = pos.x * FT_PER_M, yf = pos.y * FT_PER_M, zf = pos.z * FT_PER_M;
+    if (yf > apexFt) apexFt = yf;
+
+    var distFt = Math.sqrt(xf*xf + zf*zf);
+    var angDeg = Math.atan2(xf, -zf) * 180 / Math.PI;
+    if (wallRadius === null && Math.abs(angDeg) <= WALL_ANGLE_RANGE){
+      wallRadius = wallDistanceAtAngle(angDeg);
+    }
+    var wr = wallRadius !== null ? wallRadius : wallDistanceAtAngle(Math.max(-45, Math.min(45, angDeg)));
+
+    // Wall interaction — clear it, or carom back into play.
+    if (!wallChecked && distFt >= wr && Math.abs(angDeg) <= WALL_ANGLE_RANGE){
+      wallChecked = true;
+      if (yf > WALL_HEIGHT_FT){
+        clearsWall = true;
+      } else {
+        hitWall = true;
+        wallHitPoint = { x: xf, y: yf, z: zf, t: t };
+        var nx = xf / distFt, nz = zf / distFt;
+        var vr = vel.x * nx + vel.z * nz;
+        vel.x -= (1 + COR_WALL) * vr * nx;
+        vel.z -= (1 + COR_WALL) * vr * nz;
+        vel.y *= 0.6;
+        pos.x = (wr - 1.5) * nx * M_PER_FT;
+        pos.z = (wr - 1.5) * nz * M_PER_FT;
+        xf = pos.x * FT_PER_M; zf = pos.z * FT_PER_M;
+      }
+    }
+
+    // Ground contact — bounce, then eventually roll.
+    if (pos.y <= 0 && !rolling){
+      pos.y = 0; yf = 0;
+      if (flightEndIdx === null){
+        flightEndIdx = points.length;
+        carryFt = Math.sqrt(xf*xf + zf*zf);
+      }
+      bounces++;
+      var impactSpeed = Math.abs(vel.y);
+      bounceEvents.push({ t:t, x:xf, z:zf, strength: Math.min(1, impactSpeed / 12) });
+      if (impactSpeed < MIN_BOUNCE_MS || bounces > 6){
+        rolling = true; vel.y = 0;
+      } else {
+        vel.y = -vel.y * COR_GROUND;
+        vel.x *= FRICTION_GROUND;
+        vel.z *= FRICTION_GROUND;
+        omega *= 0.4;
+      }
+    }
+
+    points.push({ t:t, x:xf, y:yf, z:zf });
+
+    if (rolling && Math.sqrt(vel.x*vel.x + vel.z*vel.z) < 0.15) break;
+    if (t > 18) break;
+  }
+
+  var last = points[points.length - 1];
+  var totalFt = Math.sqrt(last.x*last.x + last.z*last.z);
+  if (flightEndIdx === null){ flightEndIdx = points.length - 1; carryFt = totalFt; }
+  var landingAngleDeg = Math.atan2(last.x, -last.z) * 180 / Math.PI;
+
+  return {
+    points: points,
+    bounceEvents: bounceEvents,
+    hangTimeSec: points[flightEndIdx].t,
+    totalTimeSec: t,
+    apexFt: apexFt,
+    carryFt: Math.round(carryFt),
+    totalDistanceFt: Math.round(totalFt),
+    landingAngleDeg: landingAngleDeg,
+    bounces: bounces,
+    clearsWall: clearsWall,
+    hitWall: hitWall,
+    wallHitPoint: wallHitPoint,
+    wallDistanceFt: Math.round(wallRadius !== null ? wallRadius : CENTER_FT)
+  };
+}
+
+function positionOnTrajectory(traj, elapsedSec){
+  var pts = traj.points;
+  if (elapsedSec <= 0) return pts[0];
+  if (elapsedSec >= pts[pts.length-1].t) return pts[pts.length - 1];
+  for (var i = 1; i < pts.length; i++){
+    if (pts[i].t >= elapsedSec){
+      var a = pts[i-1], b = pts[i];
+      var span = b.t - a.t;
+      var f = span > 0 ? (elapsedSec - a.t) / span : 0;
+      return { x: a.x + (b.x-a.x)*f, y: a.y + (b.y-a.y)*f, z: a.z + (b.z-a.z)*f, t: elapsedSec };
+    }
+  }
+  return pts[pts.length - 1];
+}
+
+/* =========================================================================
+   RENDERER — day game, tone mapped, soft shadows
+   ========================================================================= */
 var canvas = document.getElementById('field-canvas');
 var fieldWrap = document.getElementById('field-wrap');
 var renderer = new THREE.WebGLRenderer({ canvas:canvas, antialias:true, alpha:false });
-var scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0A1128);
-scene.fog = new THREE.Fog(0x0A1128, 8, 24);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputEncoding = THREE.sRGBEncoding;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.92;
 
-var camera = new THREE.PerspectiveCamera(62, 1, 0.1, 100);
-camera.position.set(0, 1.6, 1.4);
-camera.lookAt(0, 1.25, MOUND_Z);
+var scene = new THREE.Scene();
+scene.background = new THREE.Color(0x86BCE4);
+scene.fog = new THREE.Fog(0xA9CBE4, 380, 1100);
+
+var camera = new THREE.PerspectiveCamera(58, 1, 0.1, 2500);
+// Lower and further back than a pure batter's-eye view — sits behind and
+// slightly off the batter's shoulder so plate, mound, and bat are all in
+// frame at once. Updated per-handedness in setHandedness().
+var BATTER_CAM_POS = new THREE.Vector3(0, 5.6, 19);
+var BATTER_CAM_LOOK = new THREE.Vector3(0, 3.0, -30);
+camera.position.copy(BATTER_CAM_POS);
+var currentLook = new THREE.Vector3().copy(BATTER_CAM_LOOK);
+camera.lookAt(currentLook);
 
 function resizeRenderer(){
   var w = fieldWrap.clientWidth, h = fieldWrap.clientHeight;
@@ -118,123 +386,918 @@ function resizeRenderer(){
 }
 window.addEventListener('resize', resizeRenderer);
 
-var ambient = new THREE.AmbientLight(0x8899BB, 0.55);
-scene.add(ambient);
-var stadiumLight = new THREE.DirectionalLight(0xFFF4DD, 0.9);
-stadiumLight.position.set(4, 10, 4);
-scene.add(stadiumLight);
-var rimLight = new THREE.DirectionalLight(0x6B8E4E, 0.3);
-rimLight.position.set(-4, 3, -10);
-scene.add(rimLight);
+/* ---- Sky dome ---- */
+var skyGeo = new THREE.SphereGeometry(1600, 32, 16);
+var skyCanvas = document.createElement('canvas');
+skyCanvas.width = 16; skyCanvas.height = 256;
+var skyCtx = skyCanvas.getContext('2d');
+var skyGrad = skyCtx.createLinearGradient(0, 0, 0, 256);
+skyGrad.addColorStop(0.0, '#3E7FC1');
+skyGrad.addColorStop(0.45, '#7FB3E0');
+skyGrad.addColorStop(0.75, '#B8D8EF');
+skyGrad.addColorStop(1.0, '#DCEAF5');
+skyCtx.fillStyle = skyGrad;
+skyCtx.fillRect(0, 0, 16, 256);
+var skyTex = new THREE.CanvasTexture(skyCanvas);
+var sky = new THREE.Mesh(skyGeo, new THREE.MeshBasicMaterial({ map:skyTex, side:THREE.BackSide, fog:false, depthWrite:false }));
+scene.add(sky);
 
-var ground = new THREE.Mesh(
-  new THREE.PlaneGeometry(40, 40),
-  new THREE.MeshStandardMaterial({ color:0x3F6B2A, roughness:0.95 })
-);
-ground.rotation.x = -Math.PI/2;
-ground.position.y = 0;
-scene.add(ground);
+/* ---- Lighting: sun key + sky fill + bounce ---- */
+var hemi = new THREE.HemisphereLight(0x9EC2E0, 0x46602E, 0.42);
+scene.add(hemi);
 
-var dirtPath = new THREE.Mesh(
-  new THREE.PlaneGeometry(3.2, Math.abs(MOUND_Z)+3),
-  new THREE.MeshStandardMaterial({ color:0x8B5A2B, roughness:1 })
-);
-dirtPath.rotation.x = -Math.PI/2;
-dirtPath.position.set(0, 0.005, MOUND_Z/2);
-scene.add(dirtPath);
+var sun = new THREE.DirectionalLight(0xFFF1D4, 1.55);
+sun.position.set(180, 340, 140);
+sun.castShadow = true;
+sun.shadow.mapSize.width = 2048;
+sun.shadow.mapSize.height = 2048;
+sun.shadow.camera.near = 50;
+sun.shadow.camera.far = 900;
+sun.shadow.camera.left = -260;
+sun.shadow.camera.right = 260;
+sun.shadow.camera.top = 260;
+sun.shadow.camera.bottom = -260;
+sun.shadow.bias = -0.0006;
+sun.shadow.normalBias = 0.4;
+scene.add(sun);
+scene.add(sun.target);
+sun.target.position.set(0, 0, -160);
 
-var mound = new THREE.Mesh(
-  new THREE.CylinderGeometry(0.9, 1.1, 0.25, 20),
-  new THREE.MeshStandardMaterial({ color:0x7A4A22, roughness:1 })
-);
-mound.position.set(0, 0.12, MOUND_Z);
-scene.add(mound);
+var bounceLight = new THREE.DirectionalLight(0x9FBF7A, 0.28);
+bounceLight.position.set(-120, 40, 80);
+scene.add(bounceLight);
 
-var plate = new THREE.Mesh(
-  new THREE.CircleGeometry(0.22, 5),
-  new THREE.MeshStandardMaterial({ color:0xF5F1E8, roughness:0.6 })
-);
-plate.rotation.x = -Math.PI/2;
-plate.rotation.z = Math.PI;
-plate.position.set(0, 0.01, PLATE_Z + 0.3);
-scene.add(plate);
+/* =========================================================================
+   FIELD TEXTURES — mown grass with alternating radial stripes + noise
+   ========================================================================= */
+function makeGrassTexture(){
+  var size = 1024;
+  var c = document.createElement('canvas');
+  c.width = size; c.height = size;
+  var ctx = c.getContext('2d');
+  var cx = size/2, cy = size/2;
 
-var wall = new THREE.Mesh(
-  new THREE.PlaneGeometry(30, 3.2),
-  new THREE.MeshStandardMaterial({ color:0x0B3D2E, roughness:1 })
-);
-wall.position.set(0, 1.6, MOUND_Z - 6);
-scene.add(wall);
+  ctx.fillStyle = '#4E8A32';
+  ctx.fillRect(0, 0, size, size);
 
-// Depth reference stripes along the dirt path, fading with distance,
-// so the eye has a fixed grid to judge the ball's progress against.
-for (var i = 1; i < 8; i++){
-  var stripeZ = MOUND_Z + (PLATE_Z - MOUND_Z) * (i / 8);
-  var stripe = new THREE.Mesh(
-    new THREE.PlaneGeometry(3.0, 0.12),
-    new THREE.MeshBasicMaterial({ color:0xF5F1E8, transparent:true, opacity:0.12 })
-  );
-  stripe.rotation.x = -Math.PI/2;
-  stripe.position.set(0, 0.01, stripeZ);
-  scene.add(stripe);
+  // Alternating mown wedges radiating from home plate (canvas center)
+  var wedges = 18;
+  for (var i = 0; i < wedges; i++){
+    if (i % 2 === 0) continue;
+    var a0 = (i / wedges) * Math.PI * 2;
+    var a1 = ((i+1) / wedges) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, size, a0, a1);
+    ctx.closePath();
+    ctx.fillStyle = '#57993A';
+    ctx.fill();
+  }
+
+  // Concentric mow arcs for cross-cut depth
+  for (var r = 60; r < size; r += 78){
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI*2);
+    ctx.strokeStyle = 'rgba(255,255,255,0.045)';
+    ctx.lineWidth = 30;
+    ctx.stroke();
+  }
+
+  // Fine grain noise
+  var img = ctx.getImageData(0, 0, size, size);
+  var d = img.data;
+  for (var p = 0; p < d.length; p += 4){
+    var n = (Math.random() - 0.5) * 22;
+    d[p] = Math.max(0, Math.min(255, d[p] + n));
+    d[p+1] = Math.max(0, Math.min(255, d[p+1] + n));
+    d[p+2] = Math.max(0, Math.min(255, d[p+2] + n));
+  }
+  ctx.putImageData(img, 0, 0);
+
+  var tex = new THREE.CanvasTexture(c);
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  tex.encoding = THREE.sRGBEncoding;
+  return tex;
 }
 
+function makeDirtTexture(){
+  var size = 512;
+  var c = document.createElement('canvas');
+  c.width = size; c.height = size;
+  var ctx = c.getContext('2d');
+  ctx.fillStyle = '#9C6238';
+  ctx.fillRect(0, 0, size, size);
+  for (var i = 0; i < 2600; i++){
+    var x = Math.random()*size, y = Math.random()*size;
+    var r = Math.random()*4 + 1;
+    var shade = Math.random() > 0.5 ? 'rgba(120,72,40,0.35)' : 'rgba(190,140,96,0.30)';
+    ctx.fillStyle = shade;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2); ctx.fill();
+  }
+  var tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(6, 6);
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  tex.encoding = THREE.sRGBEncoding;
+  return tex;
+}
+
+var grassTex = makeGrassTexture();
+var dirtTex = makeDirtTexture();
+
+var ground = new THREE.Mesh(
+  new THREE.CircleGeometry(620, 96),
+  new THREE.MeshStandardMaterial({ map:grassTex, roughness:0.98, metalness:0.0 })
+);
+ground.rotation.x = -Math.PI/2;
+ground.position.set(0, 0, PLATE_Z);
+ground.receiveShadow = true;
+scene.add(ground);
+
+var dirtMat = new THREE.MeshStandardMaterial({ map:dirtTex, roughness:1.0, metalness:0.0 });
+
+/* ---- Infield dirt arc (skinned infield) ---- */
+var infieldDirt = new THREE.Mesh(new THREE.CircleGeometry(95, 48, Math.PI*0.25, Math.PI*0.5), dirtMat);
+infieldDirt.rotation.x = -Math.PI/2;
+infieldDirt.position.set(0, 0.02, PLATE_Z);
+infieldDirt.receiveShadow = true;
+scene.add(infieldDirt);
+
+/* ---- Base coordinates (world space) ---- */
+var homeX = 0, homeZ = PLATE_Z;
+var firstX = BASE_PATH_FT*0.707, firstZ = PLATE_Z - BASE_PATH_FT*0.707;
+var secondX = 0, secondZ = PLATE_Z - BASE_PATH_FT*1.414;
+var thirdX = -BASE_PATH_FT*0.707, thirdZ = PLATE_Z - BASE_PATH_FT*0.707;
+
+/* ---- Infield grass diamond, inset inside the base paths ----
+   Shape-space Y maps to (PLATE_Z - worldZ) after the -90deg X rotation,
+   so vertices use positive Y to extend toward the outfield. Vertices are
+   scaled 0.80 about the diamond's centroid so the grass sits inside the
+   dirt base paths rather than overlapping them. */
+var diamondShape = new THREE.Shape();
+var dCentroidY = BASE_PATH_FT * 0.707;
+var dInset = 0.80;
+function dsy(y){ return dCentroidY + (y - dCentroidY) * dInset; }
+var dsx = BASE_PATH_FT * 0.707 * dInset;
+diamondShape.moveTo(0, dsy(0));
+diamondShape.lineTo(dsx, dCentroidY);
+diamondShape.lineTo(0, dsy(BASE_PATH_FT*1.414));
+diamondShape.lineTo(-dsx, dCentroidY);
+diamondShape.closePath();
+var infieldGrass = new THREE.Mesh(
+  new THREE.ShapeGeometry(diamondShape),
+  new THREE.MeshStandardMaterial({ map:grassTex, roughness:0.98 })
+);
+infieldGrass.rotation.x = -Math.PI/2;
+infieldGrass.position.set(0, 0.035, PLATE_Z);
+infieldGrass.receiveShadow = true;
+scene.add(infieldGrass);
+
+/* ---- Base paths ---- */
+function addBasePath(x1, z1, x2, z2){
+  var dx = x2-x1, dz = z2-z1;
+  var len = Math.sqrt(dx*dx + dz*dz);
+  var path = new THREE.Mesh(new THREE.PlaneGeometry(len, 6), dirtMat);
+  path.rotation.x = -Math.PI/2;
+  path.rotation.z = -Math.atan2(dz, dx);
+  path.position.set((x1+x2)/2, 0.05, (z1+z2)/2);
+  path.receiveShadow = true;
+  scene.add(path);
+}
+addBasePath(homeX, homeZ, firstX, firstZ);
+addBasePath(firstX, firstZ, secondX, secondZ);
+addBasePath(secondX, secondZ, thirdX, thirdZ);
+addBasePath(thirdX, thirdZ, homeX, homeZ);
+
+/* ---- Bases ---- */
+var baseMat = new THREE.MeshStandardMaterial({ color:0xF2EFE6, roughness:0.75 });
+[[firstX,firstZ],[secondX,secondZ],[thirdX,thirdZ]].forEach(function(b){
+  var m = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.5, 3.2), baseMat);
+  m.position.set(b[0], 0.25, b[1]);
+  m.rotation.y = Math.PI/4;
+  m.castShadow = true; m.receiveShadow = true;
+  scene.add(m);
+});
+
+/* ---- Foul lines ---- */
+var chalkMat = new THREE.MeshBasicMaterial({ color:0xFFFFFF });
+[-1, 1].forEach(function(sign){
+  var len = wallDistanceAtAngle(sign*WALL_ANGLE_RANGE);
+  var line = new THREE.Mesh(new THREE.PlaneGeometry(len, 1.1), chalkMat);
+  line.rotation.x = -Math.PI/2;
+  line.rotation.z = sign * (Math.PI/4);
+  var ang = sign * WALL_ANGLE_RANGE * Math.PI/180;
+  line.position.set(Math.sin(ang)*len/2, 0.07, PLATE_Z - Math.cos(ang)*len/2);
+  scene.add(line);
+});
+
+/* ---- Pitcher's mound ---- */
+var mound = new THREE.Mesh(new THREE.CylinderGeometry(9, 11, 1.2, 32), dirtMat);
+mound.position.set(0, 0.6, MOUND_Z);
+mound.castShadow = true; mound.receiveShadow = true;
+scene.add(mound);
+
+var rubber = new THREE.Mesh(new THREE.BoxGeometry(2, 0.3, 0.8), baseMat);
+rubber.position.set(0, 1.25, MOUND_Z);
+scene.add(rubber);
+
+/* ---- Home plate + batter's box ---- */
+var plateApron = new THREE.Mesh(new THREE.CircleGeometry(13, 32), dirtMat);
+plateApron.rotation.x = -Math.PI/2;
+plateApron.position.set(0, 0.04, PLATE_Z + 1);
+plateApron.receiveShadow = true;
+scene.add(plateApron);
+
+var plate = new THREE.Mesh(new THREE.CircleGeometry(0.85, 5), baseMat);
+plate.rotation.x = -Math.PI/2;
+plate.rotation.z = Math.PI;
+plate.position.set(0, 0.08, PLATE_Z + 1);
+scene.add(plate);
+
+[-1, 1].forEach(function(s){
+  var box = new THREE.Mesh(new THREE.PlaneGeometry(4, 6), new THREE.MeshBasicMaterial({ color:0xFFFFFF, transparent:true, opacity:0.55 }));
+  box.rotation.x = -Math.PI/2;
+  box.position.set(s*3.6, 0.06, PLATE_Z + 1);
+  scene.add(box);
+});
+
+/* =========================================================================
+   OUTFIELD WALL + PADDING + DISTANCE MARKERS
+   ========================================================================= */
+var wallGroup = new THREE.Group();
+var wallMat = new THREE.MeshStandardMaterial({ color:0x14503B, roughness:0.92 });
+var wallCapMat = new THREE.MeshStandardMaterial({ color:0xFAC775, roughness:0.6 });
+var WALL_SEGMENTS = 48;
+for (var wi = 0; wi < WALL_SEGMENTS; wi++){
+  var aStart = -WALL_ANGLE_RANGE + (2*WALL_ANGLE_RANGE) * (wi / WALL_SEGMENTS);
+  var aEnd = -WALL_ANGLE_RANGE + (2*WALL_ANGLE_RANGE) * ((wi+1) / WALL_SEGMENTS);
+  var aMid = (aStart + aEnd) / 2;
+  var rStart = wallDistanceAtAngle(aStart);
+  var rEnd = wallDistanceAtAngle(aEnd);
+  var p1 = { x: rStart*Math.sin(aStart*Math.PI/180), z: PLATE_Z - rStart*Math.cos(aStart*Math.PI/180) };
+  var p2 = { x: rEnd*Math.sin(aEnd*Math.PI/180), z: PLATE_Z - rEnd*Math.cos(aEnd*Math.PI/180) };
+  var segLen = Math.sqrt((p2.x-p1.x)*(p2.x-p1.x) + (p2.z-p1.z)*(p2.z-p1.z)) + 0.6;
+  var segH = (aMid > -7 && aMid < 7) ? WALL_HEIGHT_FT + 6 : WALL_HEIGHT_FT;
+  var seg = new THREE.Mesh(new THREE.BoxGeometry(segLen, segH, 1.6), wallMat);
+  seg.position.set((p1.x+p2.x)/2, segH/2, (p1.z+p2.z)/2);
+  seg.rotation.y = Math.atan2(p2.x-p1.x, p2.z-p1.z) + Math.PI/2;
+  seg.castShadow = true; seg.receiveShadow = true;
+  wallGroup.add(seg);
+  var cap = new THREE.Mesh(new THREE.BoxGeometry(segLen, 0.6, 1.9), wallCapMat);
+  cap.position.set(seg.position.x, segH + 0.3, seg.position.z);
+  cap.rotation.y = seg.rotation.y;
+  wallGroup.add(cap);
+}
+scene.add(wallGroup);
+
+/* ---- Distance markers painted on the wall ---- */
+function makeMarkerTexture(text){
+  var c = document.createElement('canvas');
+  c.width = 256; c.height = 128;
+  var ctx = c.getContext('2d');
+  ctx.clearRect(0,0,256,128);
+  ctx.fillStyle = '#FFFFFF';
+  ctx.font = 'bold 84px Oswald, sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(text, 128, 68);
+  var tx = new THREE.CanvasTexture(c);
+  tx.encoding = THREE.sRGBEncoding;
+  return tx;
+}
+[-42, -25, 0, 25, 42].forEach(function(ang){
+  var r = wallDistanceAtAngle(ang);
+  var mk = new THREE.Mesh(
+    new THREE.PlaneGeometry(16, 8),
+    new THREE.MeshBasicMaterial({ map:makeMarkerTexture(String(Math.round(r))), transparent:true })
+  );
+  var rad = ang*Math.PI/180;
+  mk.position.set(Math.sin(rad)*(r-0.9), 4.4, PLATE_Z - Math.cos(rad)*(r-0.9));
+  mk.rotation.y = -rad;
+  scene.add(mk);
+});
+
+/* ---- Foul poles ---- */
+var poleMat = new THREE.MeshStandardMaterial({ color:0xFFD24A, roughness:0.4, emissive:0x3A2A00 });
+[-WALL_ANGLE_RANGE, WALL_ANGLE_RANGE].forEach(function(ang){
+  var r = wallDistanceAtAngle(ang);
+  var rad = ang*Math.PI/180;
+  var px = r * Math.sin(rad);
+  var pz = PLATE_Z - r * Math.cos(rad);
+  var pole = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.7, 60, 10), poleMat);
+  pole.position.set(px, WALL_HEIGHT_FT + 30, pz);
+  pole.castShadow = true;
+  scene.add(pole);
+});
+
+/* =========================================================================
+   STADIUM — tiered decks, facade, crowd, light towers
+   ========================================================================= */
+var stadiumGroup = new THREE.Group();
+var concreteMat = new THREE.MeshStandardMaterial({ color:0x4F5257, roughness:0.96 });
+var deckDarkMat = new THREE.MeshStandardMaterial({ color:0x2B2D30, roughness:0.92 });
+var seatBankMat = new THREE.MeshStandardMaterial({ color:0x1F4C63, roughness:0.9 });
+
+var DECKS = [
+  { r: CENTER_FT + 34,  y: WALL_HEIGHT_FT + 2,  h: 26, rows: 5 },
+  { r: CENTER_FT + 78,  y: WALL_HEIGHT_FT + 34, h: 30, rows: 5 },
+  { r: CENTER_FT + 124, y: WALL_HEIGHT_FT + 70, h: 32, rows: 4 }
+];
+
+// Raked seating decks built as angled slabs following the bowl curve
+DECKS.forEach(function(deck){
+  var segs = 56;
+  for (var i = 0; i < segs; i++){
+    var a0 = -WALL_ANGLE_RANGE - 14 + (2*(WALL_ANGLE_RANGE+14)) * (i/segs);
+    var a1 = -WALL_ANGLE_RANGE - 14 + (2*(WALL_ANGLE_RANGE+14)) * ((i+1)/segs);
+    var r0 = deck.r;
+    var p0 = { x: r0*Math.sin(a0*Math.PI/180), z: PLATE_Z - r0*Math.cos(a0*Math.PI/180) };
+    var p1 = { x: r0*Math.sin(a1*Math.PI/180), z: PLATE_Z - r0*Math.cos(a1*Math.PI/180) };
+    var segLen = Math.sqrt((p1.x-p0.x)*(p1.x-p0.x) + (p1.z-p0.z)*(p1.z-p0.z)) + 1;
+    var slab = new THREE.Mesh(new THREE.BoxGeometry(segLen, deck.h, 40), seatBankMat);
+    slab.position.set((p0.x+p1.x)/2, deck.y + deck.h/2, (p0.z+p1.z)/2);
+    slab.rotation.y = Math.atan2(p1.x-p0.x, p1.z-p0.z) + Math.PI/2;
+    slab.rotation.x = -0.22;
+    slab.receiveShadow = true; slab.castShadow = true;
+    stadiumGroup.add(slab);
+  }
+  // Deck facade band
+  var facade = new THREE.Mesh(new THREE.CylinderGeometry(deck.r - 8, deck.r - 8, 5, 72, 1, true,
+    (-WALL_ANGLE_RANGE-14)*Math.PI/180 + Math.PI, (2*(WALL_ANGLE_RANGE+14))*Math.PI/180), deckDarkMat);
+  facade.position.set(0, deck.y - 1, PLATE_Z);
+  facade.material.side = THREE.DoubleSide;
+  stadiumGroup.add(facade);
+});
+scene.add(stadiumGroup);
+
+// Crowd — instanced colored specks across every deck
+var crowdColors = [0xA8A296, 0x24384F, 0x5E2323, 0x2A472A, 0x1E1E1D, 0x8A6F22, 0x452F52, 0x7A422A];
+var crowdGeo = new THREE.BoxGeometry(1.5, 2.4, 1.2);
+var crowdPerDeck = 900;
+var crowdTotal = crowdPerDeck * DECKS.length;
+var crowdMesh = new THREE.InstancedMesh(
+  crowdGeo,
+  new THREE.MeshStandardMaterial({ roughness:0.95 }),
+  crowdTotal
+);
+crowdMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(crowdTotal * 3), 3);
+var dummy = new THREE.Object3D();
+var tmpColor = new THREE.Color();
+var ci = 0;
+DECKS.forEach(function(deck){
+  for (var i = 0; i < crowdPerDeck; i++){
+    var ang = -WALL_ANGLE_RANGE - 12 + Math.random() * (2*(WALL_ANGLE_RANGE+12));
+    // Keep the batter's eye wedge empty — bright specks directly behind the
+    // pitcher are exactly what makes a white ball hard to pick up.
+    if (Math.abs(ang) < 12){
+      dummy.position.set(0, -500, 0);
+      dummy.updateMatrix();
+      crowdMesh.setMatrixAt(ci, dummy.matrix);
+      tmpColor.setHex(0x000000);
+      crowdMesh.setColorAt(ci, tmpColor);
+      ci++;
+      continue;
+    }
+    var rad = ang * Math.PI/180;
+    var rowT = Math.random();
+    var r = deck.r - 14 + rowT * 26;
+    var y = deck.y + 3 + rowT * (deck.h * 0.62);
+    dummy.position.set(r*Math.sin(rad), y, PLATE_Z - r*Math.cos(rad));
+    dummy.rotation.y = rad;
+    dummy.scale.setScalar(0.85 + Math.random()*0.4);
+    dummy.updateMatrix();
+    crowdMesh.setMatrixAt(ci, dummy.matrix);
+    tmpColor.setHex(crowdColors[(Math.random()*crowdColors.length)|0]);
+    crowdMesh.setColorAt(ci, tmpColor);
+    ci++;
+  }
+});
+crowdMesh.instanceMatrix.needsUpdate = true;
+if (crowdMesh.instanceColor) crowdMesh.instanceColor.needsUpdate = true;
+scene.add(crowdMesh);
+
+// Light towers
+var towerMat = new THREE.MeshStandardMaterial({ color:0x55534E, roughness:0.85 });
+var lampMat = new THREE.MeshStandardMaterial({ color:0xFFFDF0, emissive:0xFFF3C4, emissiveIntensity:0.8, roughness:0.3 });
+[-38, -14, 14, 38].forEach(function(ang){
+  var rad = ang*Math.PI/180;
+  var r = CENTER_FT + 170;
+  var tx = r*Math.sin(rad), tz = PLATE_Z - r*Math.cos(rad);
+  var mast = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 3.2, 190, 8), towerMat);
+  mast.position.set(tx, 95, tz);
+  mast.castShadow = true;
+  scene.add(mast);
+  var rig = new THREE.Mesh(new THREE.BoxGeometry(44, 14, 3), towerMat);
+  rig.position.set(tx, 192, tz);
+  rig.rotation.y = rad;
+  scene.add(rig);
+  for (var lx = -1; lx <= 1; lx++){
+    for (var ly = -1; ly <= 1; ly += 2){
+      var lamp = new THREE.Mesh(new THREE.BoxGeometry(9, 5, 1.2), lampMat);
+      lamp.position.set(tx + Math.cos(rad)*lx*14, 192 + ly*4, tz + Math.sin(rad)*lx*14);
+      lamp.rotation.y = rad;
+      scene.add(lamp);
+    }
+  }
+});
+
+/* ---- Batter's eye: a large matte-dark screen in dead center. This is the
+   real-world fix for exactly the problem of a white ball disappearing into
+   bright crowd/seating -- it gives the hitter a contrasting backdrop. ---- */
+var eyeMat = new THREE.MeshStandardMaterial({ color:0x18291B, roughness:1.0, metalness:0.0 });
+var eyeSegs = 14;
+var eyeSpanDeg = 22;
+for (var ei = 0; ei < eyeSegs; ei++){
+  var ea0 = -eyeSpanDeg/2 + eyeSpanDeg * (ei/eyeSegs);
+  var ea1 = -eyeSpanDeg/2 + eyeSpanDeg * ((ei+1)/eyeSegs);
+  var er = CENTER_FT + 16;
+  var ep0 = { x: er*Math.sin(ea0*Math.PI/180), z: PLATE_Z - er*Math.cos(ea0*Math.PI/180) };
+  var ep1 = { x: er*Math.sin(ea1*Math.PI/180), z: PLATE_Z - er*Math.cos(ea1*Math.PI/180) };
+  var eLen = Math.sqrt((ep1.x-ep0.x)*(ep1.x-ep0.x) + (ep1.z-ep0.z)*(ep1.z-ep0.z)) + 1;
+  var eSeg = new THREE.Mesh(new THREE.BoxGeometry(eLen, 34, 2.5), eyeMat);
+  eSeg.position.set((ep0.x+ep1.x)/2, WALL_HEIGHT_FT + 17, (ep0.z+ep1.z)/2);
+  eSeg.rotation.y = Math.atan2(ep1.x-ep0.x, ep1.z-ep0.z) + Math.PI/2;
+  eSeg.receiveShadow = true;
+  scene.add(eSeg);
+}
+
+/* ---- Scoreboard ---- */
+function makeScoreboardTexture(distText, typeText){
+  var c = document.createElement('canvas');
+  c.width = 1024; c.height = 512;
+  var ctx = c.getContext('2d');
+  ctx.fillStyle = '#0B0A08'; ctx.fillRect(0,0,1024,512);
+  ctx.strokeStyle = '#FAC775'; ctx.lineWidth = 14; ctx.strokeRect(8,8,1008,496);
+  ctx.fillStyle = '#3A3A36';
+  for (var y = 40; y < 480; y += 26){ ctx.fillRect(28, y, 968, 2); }
+  ctx.fillStyle = '#8A7D6B'; ctx.font = '54px Oswald, sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('LAST HIT', 512, 116);
+  ctx.fillStyle = '#FAC775'; ctx.font = 'bold 190px Oswald, sans-serif';
+  ctx.fillText(distText, 512, 300);
+  ctx.fillStyle = '#B7AC98'; ctx.font = '52px Oswald, sans-serif';
+  ctx.fillText(typeText, 512, 410);
+  var t = new THREE.CanvasTexture(c);
+  t.encoding = THREE.sRGBEncoding;
+  return t;
+}
+var scoreboardTex = makeScoreboardTexture('--- FT', 'READY');
+var sbR = CENTER_FT + 30;
+var scoreboardFrame = new THREE.Mesh(new THREE.BoxGeometry(96, 50, 3), deckDarkMat);
+scoreboardFrame.position.set(0, WALL_HEIGHT_FT + 64, PLATE_Z - sbR);
+scoreboardFrame.castShadow = true;
+scene.add(scoreboardFrame);
+var scoreboard = new THREE.Mesh(new THREE.PlaneGeometry(88, 44), new THREE.MeshBasicMaterial({ map:scoreboardTex }));
+scoreboard.position.set(0, WALL_HEIGHT_FT + 64, PLATE_Z - sbR + 1.8);
+scene.add(scoreboard);
+
+function updateScoreboard(distText, typeText){
+  scoreboardTex.dispose();
+  scoreboardTex = makeScoreboardTexture(distText, typeText);
+  scoreboard.material.map = scoreboardTex;
+  scoreboard.material.needsUpdate = true;
+}
+
+/* ---- Strike zone cells ---- */
 var zoneCells = {};
 ZONES.forEach(function(z){
   var pos = zoneWorldPos(z);
-  var geo = new THREE.PlaneGeometry(ZONE_CELL*0.92, ZONE_CELL*0.92);
-  var mat = new THREE.MeshBasicMaterial({ color:0xF5F1E8, transparent:true, opacity:0.06, side:THREE.DoubleSide });
+  var geo = new THREE.PlaneGeometry(ZONE_CELL_W*0.94, ZONE_CELL_H*0.94);
+  var mat = new THREE.MeshBasicMaterial({ color:0xFFFFFF, transparent:true, opacity:0.07, side:THREE.DoubleSide, depthWrite:false });
   var mesh = new THREE.Mesh(geo, mat);
   mesh.position.set(pos.x, pos.y, pos.z);
   scene.add(mesh);
-
   var edges = new THREE.LineSegments(
     new THREE.EdgesGeometry(geo),
-    new THREE.LineBasicMaterial({ color:0xF5F1E8, transparent:true, opacity:0.35 })
+    new THREE.LineBasicMaterial({ color:0xFFFFFF, transparent:true, opacity:0.4, depthWrite:false })
   );
   edges.position.copy(mesh.position);
   scene.add(edges);
-
   zoneCells[z.id] = { mesh:mesh, edges:edges };
 });
 
+/* ---- Ball ---- */
 function baseballTexture(){
   var c = document.createElement('canvas');
-  c.width = 128; c.height = 128;
+  c.width = 256; c.height = 256;
   var ctx = c.getContext('2d');
-  ctx.fillStyle = '#F5F1E8';
-  ctx.beginPath(); ctx.arc(64,64,62,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#FCFAF4';
+  ctx.fillRect(0,0,256,256);
   ctx.strokeStyle = '#C1272D';
-  ctx.lineWidth = 4;
-  ctx.beginPath(); ctx.moveTo(24,14); ctx.quadraticCurveTo(64,64,24,114); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(104,14); ctx.quadraticCurveTo(64,64,104,114); ctx.stroke();
-  return new THREE.CanvasTexture(c);
+  ctx.lineWidth = 5;
+  [58, 198].forEach(function(cx){
+    ctx.beginPath();
+    ctx.moveTo(cx, 16);
+    ctx.quadraticCurveTo(cx + (cx < 128 ? 46 : -46), 128, cx, 240);
+    ctx.stroke();
+    for (var s = 30; s < 232; s += 18){
+      var f = (s-30)/202;
+      var off = Math.sin(f*Math.PI) * (cx < 128 ? 40 : -40);
+      ctx.beginPath();
+      ctx.moveTo(cx + off - 7, s);
+      ctx.lineTo(cx + off + 7, s + 5);
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+      ctx.lineWidth = 5;
+    }
+  });
+  var t = new THREE.CanvasTexture(c);
+  t.encoding = THREE.sRGBEncoding;
+  return t;
 }
 var ballTex = baseballTexture();
-var ballGeo = new THREE.SphereGeometry(0.075, 20, 20);
-var ballMat = new THREE.MeshStandardMaterial({ map:ballTex, roughness:0.5 });
+var ballGeo = new THREE.SphereGeometry(0.123, 24, 24);
+var ballMat = new THREE.MeshStandardMaterial({ map:ballTex, roughness:0.55, metalness:0.0 });
 var ball = new THREE.Mesh(ballGeo, ballMat);
+ball.castShadow = true;
 ball.visible = false;
 scene.add(ball);
 
 var hitBall = new THREE.Mesh(ballGeo.clone(), ballMat.clone());
+hitBall.castShadow = true;
 hitBall.visible = false;
 scene.add(hitBall);
 
+/* =========================================================================
+   FLOATING BAT — visual aid standing in for the batter. Sits in the
+   appropriate box for the selected handedness, idles in a load position,
+   and plays a swing arc on contact.
+   ========================================================================= */
+var batGroup = new THREE.Group();
+var batWoodMat = new THREE.MeshStandardMaterial({ color:0xC69B63, roughness:0.55 });
+var batGripMat = new THREE.MeshStandardMaterial({ color:0x2A2622, roughness:0.9 });
+
+var batBarrel = new THREE.Mesh(new THREE.CylinderGeometry(0.23, 0.13, 1.9, 16), batWoodMat);
+batBarrel.position.y = 1.05;
+batBarrel.castShadow = true;
+batGroup.add(batBarrel);
+
+var batTaper = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.075, 1.1, 14), batWoodMat);
+batTaper.position.y = -0.45;
+batTaper.castShadow = true;
+batGroup.add(batTaper);
+
+var batGrip = new THREE.Mesh(new THREE.CylinderGeometry(0.078, 0.078, 0.95, 12), batGripMat);
+batGrip.position.y = -1.42;
+batGrip.castShadow = true;
+batGroup.add(batGrip);
+
+var batKnob = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.12, 12), batGripMat);
+batKnob.position.y = -1.94;
+batGroup.add(batKnob);
+
+// Pivot lets us swing the whole bat around the hands rather than its center
+var batPivot = new THREE.Group();
+batPivot.add(batGroup);
+batGroup.position.y = 2.0;
+scene.add(batPivot);
+
+var batState = { hand:'right', swinging:false, swingStart:0, swingDur:260,
+                 liveMotion:false, lastMotionAt:0 };
+
+/* Live orientation integrated from the Joy-Con gyro. The bat mirrors the
+   controller rather than playing a scripted arc, so the on-screen swing
+   matches whatever you actually did with your hands.
+   AXIS_MAP converts Joy-Con gyro axes into scene axes — if the bat pivots
+   around the wrong axis for how you hold it, swap/negate here. */
+var motionQuat = new THREE.Quaternion();
+var restQuat = new THREE.Quaternion();
+var tmpQuat = new THREE.Quaternion();
+var tmpAxis = new THREE.Vector3();
+var MOTION_GAIN = 1.0;
+
+function axisMap(gx, gy, gz){
+  // Joy-Con held as a bat handle: its long axis becomes the bat's long axis.
+  return { x: -gy, y: -gz, z: -gx };
+}
+
+function applyMotion(gx, gy, gz, dtSec){
+  var m = axisMap(gx, gy, gz);
+  // deg/sec -> rad for this step
+  var wx = m.x * Math.PI/180 * dtSec * MOTION_GAIN;
+  var wy = m.y * Math.PI/180 * dtSec * MOTION_GAIN;
+  var wz = m.z * Math.PI/180 * dtSec * MOTION_GAIN;
+  var mag = Math.sqrt(wx*wx + wy*wy + wz*wz);
+  if (mag < 1e-6) return;
+  tmpAxis.set(wx/mag, wy/mag, wz/mag);
+  tmpQuat.setFromAxisAngle(tmpAxis, mag);
+  motionQuat.multiply(tmpQuat);
+  motionQuat.normalize();
+  batState.liveMotion = true;
+  batState.lastMotionAt = performance.now();
+}
+
+function recenterBat(){
+  motionQuat.identity();
+}
+
+function setHandedness(hand){
+  batState.hand = hand;
+  // Right-handed batter stands on the third-base side (-X here).
+  var side = hand === 'right' ? -1 : 1;
+  batPivot.position.set(side * 2.9, 2.7, PLATE_Z + 1.4);
+  batPivot.rotation.set(0, 0, 0);
+  batGroup.rotation.set(0, 0, side * 0.5);
+  batPivot.rotation.y = side * 0.35;
+  // Camera shifts to the opposite side so the bat doesn't block the pitch
+  BATTER_CAM_POS.set(-side * 2.2, 5.6, 19);
+  BATTER_CAM_LOOK.set(-side * 0.3, 3.0, -30);
+  var b = document.getElementById('btn-hand');
+  b.textContent = 'Bats: ' + hand;
+}
+
+document.getElementById('btn-hand').onclick = function(){
+  setHandedness(batState.hand === 'right' ? 'left' : 'right');
+};
+setHandedness('right');
+
+document.getElementById('btn-recenter').onclick = function(){
+  recenterBat();
+};
+
+function triggerBatSwing(){
+  batState.swinging = true;
+  batState.swingStart = performance.now();
+}
+
+function updateBat(now){
+  var side = batState.hand === 'right' ? -1 : 1;
+
+  // Live mode: bat mirrors the Joy-Con's integrated orientation directly.
+  if (batState.liveMotion && (now - batState.lastMotionAt) < 700){
+    restQuat.setFromEuler(new THREE.Euler(0, 0, side * 0.5));
+    batGroup.quaternion.copy(restQuat).multiply(motionQuat);
+    batPivot.rotation.y = side * 0.35;
+    return;
+  }
+
+  // Fallback: scripted arc, used when the bridge isn't streaming motion.
+  if (batState.swinging){
+    var t = (now - batState.swingStart) / batState.swingDur;
+    if (t >= 1){
+      batState.swinging = false;
+      batGroup.rotation.set(0, 0, side * 0.5);
+      batPivot.rotation.y = side * 0.35;
+    } else {
+      var e = 1 - Math.pow(1 - t, 3);
+      batGroup.rotation.set(0, 0, side * (0.5 - e * 2.6));
+      batPivot.rotation.y = side * (0.35 - e * 2.2);
+    }
+  } else {
+    var w = Math.sin(now * 0.0022) * 0.05;
+    batGroup.rotation.set(0, 0, side * (0.5 + w));
+    batPivot.rotation.y = side * (0.35 + w * 0.4);
+  }
+}
+
 function render(){ renderer.render(scene, camera); }
 
-function pickZone(){
-  return ZONES[Math.floor(Math.random() * ZONES.length)];
+/* ---- Ball trail ---- */
+var TRAIL_MAX = 90;
+var trailPositions = new Float32Array(TRAIL_MAX * 3);
+var trailGeo = new THREE.BufferGeometry();
+trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+trailGeo.setDrawRange(0, 0);
+var trailLine = new THREE.Line(trailGeo, new THREE.LineBasicMaterial({ color:0xFFFFFF, transparent:true, opacity:0.55, linewidth:2 }));
+trailLine.frustumCulled = false;
+trailLine.visible = false;
+scene.add(trailLine);
+var trailCount = 0;
+
+function resetTrail(){
+  trailCount = 0;
+  trailGeo.setDrawRange(0, 0);
+  trailLine.visible = false;
 }
+function pushTrail(x, y, z){
+  if (trailCount < TRAIL_MAX){
+    trailPositions[trailCount*3] = x;
+    trailPositions[trailCount*3+1] = y;
+    trailPositions[trailCount*3+2] = z;
+    trailCount++;
+  } else {
+    trailPositions.copyWithin(0, 3);
+    trailPositions[(TRAIL_MAX-1)*3] = x;
+    trailPositions[(TRAIL_MAX-1)*3+1] = y;
+    trailPositions[(TRAIL_MAX-1)*3+2] = z;
+  }
+  trailGeo.setDrawRange(0, trailCount);
+  trailGeo.attributes.position.needsUpdate = true;
+  trailLine.visible = true;
+}
+
+/* ---- Contact flash ---- */
+function makeFlashTexture(){
+  var c = document.createElement('canvas');
+  c.width = 128; c.height = 128;
+  var ctx = c.getContext('2d');
+  var g = ctx.createRadialGradient(64,64,0,64,64,64);
+  g.addColorStop(0, 'rgba(255,255,240,1)');
+  g.addColorStop(0.35, 'rgba(255,225,150,0.7)');
+  g.addColorStop(1, 'rgba(255,200,110,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0,0,128,128);
+  return new THREE.CanvasTexture(c);
+}
+var flashSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map:makeFlashTexture(), transparent:true, depthWrite:false, blending:THREE.AdditiveBlending }));
+flashSprite.visible = false;
+scene.add(flashSprite);
+var flashStart = 0;
+
+function triggerFlash(x, y, z, power){
+  flashSprite.position.set(x, y, z);
+  flashSprite.scale.setScalar(1.5 + power*2.5);
+  flashSprite.material.opacity = 1;
+  flashSprite.visible = true;
+  flashStart = performance.now();
+}
+
+/* ---- Dust puffs on bounce ---- */
+function makeDustTexture(){
+  var c = document.createElement('canvas');
+  c.width = 64; c.height = 64;
+  var ctx = c.getContext('2d');
+  var g = ctx.createRadialGradient(32,32,0,32,32,32);
+  g.addColorStop(0, 'rgba(214,186,150,0.85)');
+  g.addColorStop(1, 'rgba(214,186,150,0)');
+  ctx.fillStyle = g; ctx.fillRect(0,0,64,64);
+  return new THREE.CanvasTexture(c);
+}
+var dustTex = makeDustTexture();
+var dustPool = [];
+for (var di = 0; di < 24; di++){
+  var s = new THREE.Sprite(new THREE.SpriteMaterial({ map:dustTex, transparent:true, depthWrite:false, opacity:0 }));
+  s.visible = false;
+  scene.add(s);
+  dustPool.push({ sprite:s, born:0, life:0, vy:0, scale0:1 });
+}
+var dustIdx = 0;
+function spawnDust(x, y, z, strength){
+  var n = 3 + Math.round(strength * 4);
+  for (var i = 0; i < n; i++){
+    var d = dustPool[dustIdx % dustPool.length];
+    dustIdx++;
+    d.sprite.position.set(x + (Math.random()-0.5)*4, y + 0.5, z + (Math.random()-0.5)*4);
+    d.scale0 = 2 + strength*5 + Math.random()*2;
+    d.sprite.scale.setScalar(d.scale0);
+    d.sprite.material.opacity = 0.55 * (0.4 + strength);
+    d.sprite.visible = true;
+    d.born = performance.now();
+    d.life = 700 + Math.random()*500;
+    d.vy = 3 + Math.random()*5;
+  }
+}
+function updateDust(now){
+  for (var i = 0; i < dustPool.length; i++){
+    var d = dustPool[i];
+    if (!d.sprite.visible) continue;
+    var age = (now - d.born) / d.life;
+    if (age >= 1){ d.sprite.visible = false; continue; }
+    d.sprite.position.y += d.vy * 0.016;
+    d.sprite.scale.setScalar(d.scale0 * (1 + age*1.6));
+    d.sprite.material.opacity = 0.55 * (1 - age);
+  }
+}
+
+/* =========================================================================
+   HUD — pitch location grid + swing timing bar
+   ========================================================================= */
+var hudZoneCtx = document.getElementById('hud-zone').getContext('2d');
+var hudTimingCtx = document.getElementById('hud-timing').getContext('2d');
+var hudTimingText = document.getElementById('hud-timing-text');
+var hudLast = { zone:null, point:null, offsetMs:null, halfWindow:null, whiff:false };
+
+function drawHudZone(){
+  var ctx = hudZoneCtx, S = 132, pad = 14, gw = S - pad*2;
+  // Grid is drawn with the real zone aspect ratio (17in-ish wide, ~22in tall)
+  var gh = gw * (ZONE_H_FT / ZONE_W_FT);
+  var topPad = (S - gh) / 2;
+  var cw = gw/3, ch = gh/3;
+  ctx.clearRect(0, 0, S, S);
+  ctx.fillStyle = 'rgba(255,255,255,0.04)';
+  ctx.fillRect(pad, topPad, gw, gh);
+  ctx.strokeStyle = 'rgba(245,241,232,0.45)';
+  ctx.lineWidth = 1;
+  for (var i = 0; i <= 3; i++){
+    ctx.beginPath(); ctx.moveTo(pad + i*cw, topPad); ctx.lineTo(pad + i*cw, topPad + gh); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(pad, topPad + i*ch); ctx.lineTo(pad + gw, topPad + i*ch); ctx.stroke();
+  }
+  if (hudLast.zone){
+    ctx.fillStyle = 'rgba(250,199,117,0.16)';
+    ctx.fillRect(pad + hudLast.zone.col*cw, topPad + hudLast.zone.row*ch, cw, ch);
+  }
+  if (hudLast.point){
+    // Map the true world-space location into grid pixels. +X is screen-right
+    // from the camera's viewpoint, matching the 3D scene without mirroring.
+    var nx = (hudLast.point.x + ZONE_W_FT/2) / ZONE_W_FT;
+    var ny = (ZONE_TOP_FT - hudLast.point.y) / ZONE_H_FT;
+    var px = pad + nx * gw;
+    var py = topPad + ny * gh;
+    // Ball drawn to scale against the zone
+    var rpx = (BALL_RADIUS_FT / ZONE_W_FT) * gw;
+    ctx.beginPath();
+    ctx.arc(px, py, Math.max(4, rpx), 0, Math.PI*2);
+    ctx.fillStyle = hudLast.whiff ? '#E24B4A' : '#FCFAF4';
+    ctx.fill();
+    ctx.strokeStyle = '#C1272D'; ctx.lineWidth = 1.4; ctx.stroke();
+  }
+}
+
+function drawHudTiming(){
+  var ctx = hudTimingCtx, W = 230, H = 56, midY = 30, barX = 10, barW = W - 20;
+  ctx.clearRect(0, 0, W, H);
+  // Zones: red (early) | amber | green (perfect) | amber | red (late)
+  var stops = [
+    ['rgba(226,75,74,0.55)', 0.00, 0.18],
+    ['rgba(239,159,39,0.55)', 0.18, 0.38],
+    ['rgba(143,191,92,0.65)', 0.38, 0.62],
+    ['rgba(239,159,39,0.55)', 0.62, 0.82],
+    ['rgba(226,75,74,0.55)', 0.82, 1.00]
+  ];
+  stops.forEach(function(s){
+    ctx.fillStyle = s[0];
+    ctx.fillRect(barX + barW*s[1], midY - 9, barW*(s[2]-s[1]), 18);
+  });
+  ctx.strokeStyle = 'rgba(245,241,232,0.5)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(barX, midY - 9, barW, 18);
+  // Center (perfect timing) tick
+  ctx.beginPath();
+  ctx.moveTo(barX + barW/2, midY - 13); ctx.lineTo(barX + barW/2, midY + 13);
+  ctx.strokeStyle = '#F5F1E8'; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.fillStyle = '#7E7361'; ctx.font = '9px Oswald, sans-serif';
+  ctx.textAlign = 'left'; ctx.fillText('EARLY', barX, 12);
+  ctx.textAlign = 'right'; ctx.fillText('LATE', barX + barW, 12);
+
+  if (hudLast.offsetMs !== null){
+    // Map offset onto the bar; anything past the window pins to the edge.
+    var half = hudLast.halfWindow || 1;
+    var norm = Math.max(-1.35, Math.min(1.35, hudLast.offsetMs / half));
+    var px = barX + barW/2 + (norm / 1.35) * (barW/2);
+    ctx.beginPath();
+    ctx.moveTo(px, midY - 15);
+    ctx.lineTo(px - 5, midY - 24);
+    ctx.lineTo(px + 5, midY - 24);
+    ctx.closePath();
+    ctx.fillStyle = hudLast.whiff ? '#E24B4A' : '#FAC775';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(px, midY - 12); ctx.lineTo(px, midY + 12);
+    ctx.strokeStyle = hudLast.whiff ? '#E24B4A' : '#FAC775';
+    ctx.lineWidth = 2.5; ctx.stroke();
+  }
+}
+
+function updateHud(zone, offsetMs, halfWindow, whiff, point){
+  hudLast.zone = zone;
+  hudLast.point = point || null;
+  hudLast.offsetMs = offsetMs;
+  hudLast.halfWindow = halfWindow;
+  hudLast.whiff = whiff;
+  drawHudZone();
+  drawHudTiming();
+  if (offsetMs === null){
+    hudTimingText.textContent = '—';
+  } else {
+    var dir = offsetMs < 0 ? 'early' : 'late';
+    hudTimingText.textContent = Math.abs(Math.round(offsetMs)) + ' ms ' + dir + (whiff ? ' — whiff' : '');
+  }
+}
+
+drawHudZone();
+drawHudTiming();
+
+/* =========================================================================
+   CAMERA CONTROL
+   ========================================================================= */
+var chaseTarget = new THREE.Vector3();
+var chaseLook = new THREE.Vector3();
+
+function updateCameraBatter(){
+  camera.position.lerp(BATTER_CAM_POS, 0.10);
+  currentLook.lerp(BATTER_CAM_LOOK, 0.10);
+  camera.lookAt(currentLook);
+}
+
+function updateCameraChase(ballPos, velDir){
+  var behind = velDir.clone().negate().multiplyScalar(20);
+  chaseTarget.set(ballPos.x + behind.x, Math.max(6, ballPos.y + 10), ballPos.z + behind.z);
+  chaseLook.set(ballPos.x + velDir.x*10, ballPos.y + velDir.y*10, ballPos.z + velDir.z*10);
+  camera.position.lerp(chaseTarget, 0.13);
+  currentLook.lerp(chaseLook, 0.2);
+  camera.lookAt(currentLook);
+}
+
+/* =========================================================================
+   GAMEPLAY
+   ========================================================================= */
+function pickZone(){ return ZONES[Math.floor(Math.random() * ZONES.length)]; }
 
 function highlightZone(zone){
   ZONES.forEach(function(z){
     var isTarget = z.id === zone.id;
-    zoneCells[z.id].mesh.material.opacity = isTarget ? 0.18 : 0.06;
-    zoneCells[z.id].edges.material.color.set(isTarget ? 0xFAC775 : 0xF5F1E8);
-    zoneCells[z.id].edges.material.opacity = isTarget ? 0.9 : 0.3;
+    zoneCells[z.id].mesh.material.opacity = isTarget ? 0.2 : 0.07;
+    zoneCells[z.id].edges.material.color.set(isTarget ? 0xFAC775 : 0xFFFFFF);
+    zoneCells[z.id].edges.material.opacity = isTarget ? 0.95 : 0.35;
   });
-  render();
 }
 
 function setPreset(name){
@@ -252,6 +1315,21 @@ btns.medium.onclick = function(){ setPreset('medium'); };
 btns.hard.onclick = function(){ setPreset('hard'); };
 setPreset('medium');
 
+/* ---- Quality toggle (shadows + crowd are the expensive bits) ---- */
+var qualityBtn = document.getElementById('btn-quality');
+qualityBtn.onclick = function(){
+  state.quality = state.quality === 'high' ? 'low' : 'high';
+  var high = state.quality === 'high';
+  renderer.shadowMap.enabled = high;
+  crowdMesh.visible = high;
+  renderer.setPixelRatio(high ? Math.min(window.devicePixelRatio, 2) : 1);
+  scene.traverse(function(o){ if (o.isMesh && o.material) o.material.needsUpdate = true; });
+  qualityBtn.textContent = 'Quality: ' + state.quality;
+  qualityBtn.className = 'preset-btn' + (high ? ' active' : '');
+};
+qualityBtn.className = 'preset-btn active';
+
+/* ---- Sound ---- */
 var audioCtx = null;
 var soundEnabled = false;
 document.getElementById('btn-sound').onclick = function(){
@@ -286,6 +1364,33 @@ function playContact(powerPct){
   src.start();
 }
 
+function playBounce(strength){
+  if (!soundEnabled || !audioCtx) return;
+  var src = audioCtx.createBufferSource();
+  src.buffer = noiseBuffer(0.12);
+  var filter = audioCtx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = 400 + strength * 900;
+  var gain = audioCtx.createGain();
+  gain.gain.setValueAtTime(0.10 + strength*0.2, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.14);
+  src.connect(filter); filter.connect(gain); gain.connect(audioCtx.destination);
+  src.start();
+}
+
+function playWallThud(){
+  if (!soundEnabled || !audioCtx) return;
+  var osc = audioCtx.createOscillator();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(60, audioCtx.currentTime + 0.2);
+  var g = audioCtx.createGain();
+  g.gain.setValueAtTime(0.5, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.25);
+  osc.connect(g); g.connect(audioCtx.destination);
+  osc.start(); osc.stop(audioCtx.currentTime + 0.26);
+}
+
 function playWhiff(powerPct){
   if (!soundEnabled || !audioCtx) return;
   var power = Math.max(0, Math.min(1, powerPct / 100));
@@ -300,7 +1405,6 @@ function playWhiff(powerPct){
   noiseGain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.09);
   src.connect(filter); filter.connect(noiseGain); noiseGain.connect(audioCtx.destination);
   src.start();
-
   var osc = audioCtx.createOscillator();
   osc.type = 'triangle';
   osc.frequency.setValueAtTime(120 + power * 100, audioCtx.currentTime);
@@ -314,116 +1418,340 @@ function playWhiff(powerPct){
 
 function normalizePower(peakGyro){
   var span = CALIB_CEIL - CALIB_FLOOR;
-  var raw = (peakGyro - CALIB_FLOOR) / span;
-  return Math.max(0, Math.min(1, raw));
+  return Math.max(0, Math.min(1, (peakGyro - CALIB_FLOOR) / span));
 }
 
 function scoreSwing(offsetMs, peakGyro, zone){
   var baseWindow = PRESETS[state.preset].window;
-  var effectiveWindow = baseWindow * zone.windowMult;
-  var half = effectiveWindow / 2;
+  var half = (baseWindow * zone.windowMult) / 2;
   if (Math.abs(offsetMs) > half){
-    return {outcome:'WHIFF', distance:0, timingQ:0, power:null};
+    return {outcome:'WHIFF', timingQ:0, power:null};
   }
   var timingQ = 1 - (Math.abs(offsetMs) / half);
   var power = normalizePower(peakGyro);
-  var combined = power * (0.5 + 0.5*timingQ) * zone.payoutMult;
-  var distance = Math.round(100 + Math.min(1, combined)*380);
   var tier;
   if (timingQ > 0.85 && power > 0.8){ tier = 'SWEET SPOT'; }
-  else if (combined > 0.5){ tier = 'SOLID CONTACT'; }
+  else if (power * (0.5+0.5*timingQ) > 0.5){ tier = 'SOLID CONTACT'; }
   else { tier = 'WEAK CONTACT'; }
-  return {outcome:tier, distance:distance, timingQ:Math.round(timingQ*100), power:Math.round(power*100)};
+  return {outcome:tier, timingQ:Math.round(timingQ*100), power:Math.round(power*100), timingQRaw:timingQ, powerRaw:power};
+}
+
+/* =========================================================================
+   PITCH SIMULATION — the pitch now flies under the same drag/gravity/Magnus
+   model as a batted ball, so it actually drops on the way in. An aim solver
+   corrects the release vector over a few iterations so the pitch still
+   arrives at the intended spot in the zone despite that drop.
+   ========================================================================= */
+function integratePitch(dirX, dirY, dirZ, speedMph, spinRpm){
+  var v0 = speedMph * 0.44704;
+  var len = Math.sqrt(dirX*dirX + dirY*dirY + dirZ*dirZ) || 1;
+  var vel = { x: v0*dirX/len, y: v0*dirY/len, z: v0*dirZ/len };
+  var pos = { x: RELEASE_X*M_PER_FT, y: RELEASE_Y*M_PER_FT, z: RELEASE_Z*M_PER_FT };
+  var omega = spinRpm * 2 * Math.PI / 60;
+  var pts = [{ t:0, x:RELEASE_X, y:RELEASE_Y, z:RELEASE_Z }];
+  var t = 0;
+  var plateZM = PLATE_Z * M_PER_FT;
+  var crossing = null;
+
+  for (var i = 0; i < 900; i++){
+    var speed = Math.sqrt(vel.x*vel.x + vel.y*vel.y + vel.z*vel.z) || 0.01;
+    var dragCoeff = 0.5 * AIR_DENSITY * DRAG_CD * BALL_AREA * speed / BALL_MASS_KG;
+    var ax = -dragCoeff * vel.x;
+    var ay = -dragCoeff * vel.y - GRAVITY;
+    var az = -dragCoeff * vel.z;
+    // Backspin on a four-seamer offsets some of the gravity drop
+    var spinFactor = (BALL_RADIUS_M * omega) / speed;
+    var liftCoeff = spinFactor > 0 ? 1 / (2 + 1/spinFactor) : 0;
+    ay += ((0.5 * AIR_DENSITY * liftCoeff * BALL_AREA * speed * speed) / BALL_MASS_KG) * 0.55;
+
+    var prev = { x:pos.x, y:pos.y, z:pos.z };
+    vel.x += ax*DT; vel.y += ay*DT; vel.z += az*DT;
+    pos.x += vel.x*DT; pos.y += vel.y*DT; pos.z += vel.z*DT;
+    t += DT;
+    pts.push({ t:t, x:pos.x*FT_PER_M, y:pos.y*FT_PER_M, z:pos.z*FT_PER_M });
+
+    if (crossing === null && prev.z < plateZM && pos.z >= plateZM){
+      var f = (plateZM - prev.z) / (pos.z - prev.z);
+      crossing = {
+        t: t - DT*(1-f),
+        x: (prev.x + (pos.x-prev.x)*f) * FT_PER_M,
+        y: (prev.y + (pos.y-prev.y)*f) * FT_PER_M
+      };
+    }
+    if (pos.z > (PLATE_Z + 14) * M_PER_FT) break;
+    if (pos.y < 0) break;
+  }
+  return { points: pts, crossing: crossing };
+}
+
+function simulatePitch(target, speedMph){
+  var spinRpm = 2100 + Math.random()*350;
+  // Seed the aim above the target by roughly the expected gravity drop —
+  // aiming straight at the target puts the pitch in the dirt before it ever
+  // reaches the plate, and the solver would have nothing to correct from.
+  var distFt = Math.abs(PLATE_Z - RELEASE_Z);
+  var tEst = distFt / (speedMph * 1.46667);
+  var aim = { x: target.x, y: target.y + 0.5 * 32.174 * tEst * tEst * 0.72 };
+  var sim = null;
+  // Iteratively correct the aim point until the ball's plate crossing lands
+  // on the intended target.
+  for (var k = 0; k < 8; k++){
+    sim = integratePitch(aim.x - RELEASE_X, aim.y - RELEASE_Y, PLATE_Z - RELEASE_Z, speedMph, spinRpm);
+    if (!sim.crossing){ aim.y += 2.0; continue; }
+    var ex = target.x - sim.crossing.x;
+    var ey = target.y - sim.crossing.y;
+    if (Math.abs(ex) < 0.005 && Math.abs(ey) < 0.005) break;
+    aim.x += ex; aim.y += ey;
+  }
+  var flightSec = sim && sim.crossing ? sim.crossing.t : (Math.abs(PLATE_Z - RELEASE_Z) / (speedMph * 1.46667));
+  return { points: sim ? sim.points : [], flightSec: flightSec, spinRpm: spinRpm };
+}
+
+function pitchPositionAt(plan, tSec){
+  var pts = plan.points;
+  if (!pts.length) return null;
+  if (tSec <= 0) return pts[0];
+  var last = pts[pts.length-1];
+  if (tSec >= last.t) return last;
+  for (var i = 1; i < pts.length; i++){
+    if (pts[i].t >= tSec){
+      var a = pts[i-1], b = pts[i];
+      var span = b.t - a.t;
+      var f = span > 0 ? (tSec - a.t) / span : 0;
+      return { x: a.x + (b.x-a.x)*f, y: a.y + (b.y-a.y)*f, z: a.z + (b.z-a.z)*f };
+    }
+  }
+  return last;
 }
 
 function ballPositionAt(elapsedMs, zone){
-  var target = zoneWorldPos(zone);
-  var pct = Math.max(0, Math.min(1, elapsedMs / state.idealContactMs));
-  var eased = pct * pct;
-  var x = 0 + (target.x - 0) * eased;
-  var y = 1.3 + (target.y - 1.3) * eased;
-  var z = MOUND_Z + (target.z - MOUND_Z) * eased;
-  return {x:x, y:y, z:z, visible: pct > 0.02};
+  // Kept for compatibility; the live path now comes from state.pitchPlan.
+  var plan = state.pitchPlan;
+  if (!plan) return { x:0, y:ZONE_CENTER_Y, z:MOUND_Z, visible:false };
+  var tSec = (elapsedMs - state.windupMs) / 1000;
+  if (tSec < 0) return { x:RELEASE_X, y:RELEASE_Y, z:RELEASE_Z, visible:false };
+  var p = pitchPositionAt(plan, tSec);
+  if (!p) return { x:0, y:ZONE_CENTER_Y, z:MOUND_Z, visible:false };
+  return { x:p.x, y:p.y, z:p.z, visible: p.z < PLATE_Z + 9 && p.y > 0.05 };
 }
 
-function tickPitch(){
-  if (!state.pitching) return;
-  var elapsed = performance.now() - state.pitchStartLocal;
-  var pos = ballPositionAt(elapsed, state.currentZone);
-  ball.position.set(pos.x, pos.y, pos.z);
-  ball.visible = pos.visible;
-  ball.rotation.x += 0.3;
-  render();
-
-  if (elapsed < state.travelMs){
-    requestAnimationFrame(tickPitch);
-  } else {
-    state.pitching = false;
-    ball.visible = false;
-    render();
-  }
+function classifyBattedBall(launchAngleDeg){
+  if (launchAngleDeg < 10) return 'GROUND BALL';
+  if (launchAngleDeg < 25) return 'LINE DRIVE';
+  if (launchAngleDeg < 50) return 'FLY BALL';
+  return 'POP UP';
 }
 
-function playLaunchArc(power){
-  var target = zoneWorldPos(state.currentZone);
+/* =========================================================================
+   LAUNCH — physics playback with trail, bounces, dust, wall carom
+   ========================================================================= */
+var activeLaunch = null;
+
+function playLaunchArc(result, offsetMs, zone, contactPoint){
+  // Contact happens wherever the ball actually was when the swing landed,
+  // sampled off the live pitch trajectory — not at the zone cell's center.
+  var target = contactPoint || zoneWorldPos(zone);
+
+  var exitVeloMph = 60 + result.powerRaw * 55;
+  exitVeloMph *= (0.85 + 0.15 * result.timingQRaw);
+
+  var idealAngle = 25;
+  var rowNudge = zone.row === 0 ? 5 : (zone.row === 2 ? -4 : 0);
+  var missSeverity = 1 - result.timingQRaw;
+  var missDirection = offsetMs < 0 ? -1 : 1;
+  var timingShift = missDirection * missSeverity * 34;
+  var jitter = (Math.random() - 0.5) * 6;
+  var launchAngleDeg = Math.max(-10, Math.min(60, idealAngle + rowNudge + timingShift + jitter));
+
+  var colSpray = (zone.col - 1) * 16;
+  var timingSpray = -offsetMs * 0.05 * (1 + missSeverity);
+  var sprayAngleDeg = Math.max(-60, Math.min(60, colSpray + timingSpray + (Math.random()-0.5)*6));
+  var isFoul = Math.abs(sprayAngleDeg) > 45;
+
+  var backspinRpm = 1800 + result.powerRaw * 800 + (Math.random()-0.5)*200;
+
+  var traj = simulateTrajectory(exitVeloMph, launchAngleDeg, sprayAngleDeg, backspinRpm, target.y);
+  traj.battedBallType = classifyBattedBall(launchAngleDeg);
+  traj.isFoul = isFoul;
+  traj.exitVeloMph = Math.round(exitVeloMph);
+  traj.launchAngleDeg = Math.round(launchAngleDeg);
+  traj.sprayAngleDeg = Math.round(sprayAngleDeg);
+  if (isFoul) traj.clearsWall = false;
+
   hitBall.position.set(target.x, target.y, target.z);
   hitBall.visible = true;
+  resetTrail();
+  triggerFlash(target.x, target.y, target.z, result.powerRaw);
 
-  var launchStart = performance.now();
-  var durationMs = 700 + power * 500;
-  var horizSpread = (Math.random() - 0.5) * 3;
-  var launchZDist = 8 + power * 20;
+  state.hitting = true;
+  state.cameraMode = 'chase';
 
-  function tickLaunch(){
-    var t = (performance.now() - launchStart) / durationMs;
-    if (t >= 1){
-      hitBall.visible = false;
-      render();
-      return;
-    }
-    var x = target.x + horizSpread * t;
-    var arcHeight = 1.5 + power * 7;
-    var y = target.y + arcHeight * 4 * t * (1-t) + t * 0.5;
-    var z = target.z - launchZDist * t;
-    hitBall.position.set(x, y, z);
-    hitBall.rotation.x += 0.4;
-    render();
-    requestAnimationFrame(tickLaunch);
-  }
-  requestAnimationFrame(tickLaunch);
+  activeLaunch = {
+    traj: traj,
+    target: target,
+    start: performance.now(),
+    nextBounce: 0,
+    wallSoundPlayed: false,
+    holdUntil: null
+  };
+  return traj;
 }
 
+/* =========================================================================
+   MAIN LOOP
+   ========================================================================= */
+function animate(){
+  requestAnimationFrame(animate);
+  var now = performance.now();
+
+  // Pitch flight
+  if (state.pitching){
+    var elapsed = now - state.pitchStartLocal;
+    var pos = ballPositionAt(elapsed, state.currentZone);
+    ball.position.set(pos.x, pos.y, pos.z);
+    ball.visible = pos.visible;
+    ball.rotation.x += 0.35;
+    if (elapsed >= state.travelMs){
+      state.pitching = false;
+      ball.visible = false;
+    }
+  }
+
+  // Batted ball playback
+  if (activeLaunch){
+    var L = activeLaunch;
+    var tSec = (now - L.start) / 1000;
+    var endT = L.traj.points[L.traj.points.length-1].t;
+    var p = positionOnTrajectory(L.traj, tSec);
+    var wx = L.target.x + p.x, wy = p.y, wz = L.target.z + p.z;
+    hitBall.position.set(wx, wy, wz);
+    hitBall.rotation.x += 0.45;
+    hitBall.rotation.z += 0.2;
+
+    if (tSec < endT) pushTrail(wx, wy, wz);
+
+    // Fire bounce dust/sound as their timestamps pass
+    while (L.nextBounce < L.traj.bounceEvents.length && L.traj.bounceEvents[L.nextBounce].t <= tSec){
+      var be = L.traj.bounceEvents[L.nextBounce];
+      spawnDust(L.target.x + be.x, 0, L.target.z + be.z, be.strength);
+      playBounce(be.strength);
+      L.nextBounce++;
+    }
+    if (!L.wallSoundPlayed && L.traj.wallHitPoint && tSec >= L.traj.wallHitPoint.t){
+      playWallThud();
+      L.wallSoundPlayed = true;
+    }
+
+    if (tSec < endT){
+      var pNext = positionOnTrajectory(L.traj, Math.min(endT, tSec + 0.05));
+      var velDir = new THREE.Vector3(pNext.x - p.x, pNext.y - p.y, pNext.z - p.z);
+      if (velDir.lengthSq() < 0.0001) velDir.set(0, -0.1, -1);
+      velDir.normalize();
+      updateCameraChase(new THREE.Vector3(wx, wy, wz), velDir);
+    } else {
+      if (L.holdUntil === null) L.holdUntil = now + 1500;
+      if (now >= L.holdUntil){
+        hitBall.visible = false;
+        resetTrail();
+        state.hitting = false;
+        state.cameraMode = 'batter';
+        activeLaunch = null;
+      }
+    }
+  }
+
+  if (state.cameraMode === 'batter' && !activeLaunch){
+    updateCameraBatter();
+  }
+
+  // Flash decay
+  if (flashSprite.visible){
+    var fa = (now - flashStart) / 260;
+    if (fa >= 1){ flashSprite.visible = false; }
+    else {
+      flashSprite.material.opacity = 1 - fa;
+      flashSprite.scale.setScalar(flashSprite.scale.x * 1.03);
+    }
+  }
+
+  updateBat(now);
+  updateDust(now);
+  sky.position.copy(camera.position);
+  renderer.render(scene, camera);
+}
+
+/* =========================================================================
+   RESULT HANDLING
+   ========================================================================= */
 function showResult(peakGyro, offsetMs){
   state.pitching = false;
+
+  var contactTimeSec = (state.idealContactMs + (offsetMs === 999999 ? 0 : offsetMs) - state.windupMs) / 1000;
+  var cp = state.pitchPlan ? pitchPositionAt(state.pitchPlan, Math.max(0, contactTimeSec)) : null;
+  var contactPoint = cp ? { x:cp.x, y:Math.max(0.6, cp.y), z:cp.z } : zoneWorldPos(state.currentZone);
 
   var swingElapsedMs = (offsetMs === 999999) ? state.travelMs : (state.idealContactMs + offsetMs);
   var pos = ballPositionAt(swingElapsedMs, state.currentZone);
   ball.position.set(pos.x, pos.y, pos.z);
-  ball.visible = pos.visible;
 
   var result = scoreSwing(offsetMs, peakGyro, state.currentZone);
+  var halfWindow = (PRESETS[state.preset].window * state.currentZone.windowMult) / 2;
   outcomeLabel.textContent = result.outcome;
   outcomeLabel.style.color = result.outcome === 'WHIFF' ? '#E24B4A' : (result.outcome === 'SWEET SPOT' ? '#8FBF5C' : '#8A7D6B');
   var zoneNote = state.currentZone.tier + ' pitch';
+
+  triggerBatSwing();
+  updateHud(state.currentZone, offsetMs === 999999 ? null : offsetMs, halfWindow,
+            result.outcome === 'WHIFF', state.pitchTarget);
+
   if (result.outcome === 'WHIFF'){
     distanceReadout.textContent = 'Whiff';
     distanceReadout.style.color = '#E24B4A';
-    distanceReadout.style.textShadow = '0 0 12px rgba(226,75,74,0.4)';
     detailLabel.textContent = (offsetMs > 0 ? 'swung too late' : 'swung too early') + ' — ' + zoneNote + ' (peak ' + Math.round(peakGyro) + ' dps)';
-    playWhiff(result.power || 0);
-    ball.visible = false;
-  } else {
-    distanceReadout.textContent = result.distance + ' ft';
-    distanceReadout.style.color = '#FAC775';
-    distanceReadout.style.textShadow = '0 0 12px rgba(250,199,117,0.4)';
-    detailLabel.textContent = zoneNote + ' — timing ' + result.timingQ + '%, power ' + result.power + '%, offset ' + Math.round(offsetMs) + 'ms';
-    playContact(result.power);
-    ball.visible = false;
-    playLaunchArc(result.power / 100);
+    playWhiff(0);
+    // Let the pitch keep travelling to the catcher rather than disappearing
+    // at the moment of the miss — an early swing should still see the ball
+    // finish its trip through the zone.
+    state.pitching = true;
+    return;
   }
-  render();
+
+  ball.visible = false;
+  playContact(result.power);
+  var traj = playLaunchArc(result, offsetMs, state.currentZone, contactPoint);
+
+  var label;
+  if (traj.isFoul){ label = 'FOUL BALL'; }
+  else if (traj.clearsWall){ label = 'HOME RUN!'; }
+  else if (traj.hitWall){ label = 'OFF THE WALL'; }
+  else if (traj.battedBallType === 'GROUND BALL'){ label = 'GROUND OUT'; }
+  else if (traj.battedBallType === 'POP UP'){ label = 'POP OUT'; }
+  else { label = traj.battedBallType + ' OUT'; }
+
+  distanceReadout.textContent = traj.carryFt + ' ft';
+  distanceReadout.style.color = traj.clearsWall ? '#8FBF5C' : (traj.isFoul ? '#E24B4A' : '#FAC775');
+  detailLabel.textContent = label + ' — ' + traj.exitVeloMph + ' mph exit, ' + traj.launchAngleDeg + '° launch, ' +
+    traj.bounces + ' bounce' + (traj.bounces === 1 ? '' : 's') + ', ' + traj.totalDistanceFt + ' ft w/ roll';
+  updateScoreboard(traj.carryFt + ' FT', label);
+
+  if (traj.carryFt > sessionBestFt){
+    sessionBestFt = traj.carryFt;
+    sessionBestEl.textContent = sessionBestFt + ' ft';
+  }
+  if (traj.clearsWall){
+    sessionHRs++;
+    sessionHrsEl.textContent = sessionHRs;
+  }
+
+  // TODO(playin/derby backend): POST to /playin/derby/api/runs
+  // { carry_ft, total_distance_ft, exit_velo, launch_angle, spray_angle,
+  //   batted_ball_type, is_foul, bounces, cleared_wall, hit_wall,
+  //   zone_id, outcome, power_pct, timing_pct, offset_ms }
 }
 
+/* =========================================================================
+   WEBSOCKET
+   ========================================================================= */
 var ws = new WebSocket('ws://localhost:8765');
 ws.onopen = function(){
   statusEl.textContent = 'Connected — tap ZR on the right joy-con to call for a pitch';
@@ -432,14 +1760,37 @@ ws.onopen = function(){
 ws.onclose = function(){ statusEl.textContent = 'Disconnected — is derby_bridge_server.py running?'; };
 ws.onerror = function(){ statusEl.textContent = 'Connection error — is derby_bridge_server.py running?'; };
 
+var lastMotionTs = 0;
 ws.onmessage = function(evt){
   var msg = JSON.parse(evt.data);
+  if (msg.type === 'motion'){
+    var nowM = performance.now();
+    var dt = lastMotionTs ? Math.min(0.05, (nowM - lastMotionTs) / 1000) : 1/60;
+    lastMotionTs = nowM;
+    applyMotion(msg.gx, msg.gy, msg.gz, dt);
+    return;
+  }
   if (msg.type === 'pitch_start'){
+    // Client-side double-tap guard mirroring the bridge server's. If a pitch
+    // is still in the air or a batted ball is being played out, ignore the
+    // new pitch rather than snapping the scene back to a fresh windup.
+    if (state.pitching || activeLaunch) return;
     state.currentZone = pickZone();
+    state.pitchTarget = zoneTargetPoint(state.currentZone);
+    var speedMph = PRESETS[state.preset].speed;
+    state.pitchPlan = simulatePitch(state.pitchTarget, speedMph);
+    // The server's ideal-contact timing covers windup + flight. Now that the
+    // flight is a real simulation with a real duration, the remainder is the
+    // windup — the ball stays hidden in the pitcher's hand until release.
+    state.windupMs = Math.max(120, state.idealContactMs - state.pitchPlan.flightSec * 1000);
     highlightZone(state.currentZone);
-
     state.pitching = true;
+    state.cameraMode = 'batter';
     state.pitchStartLocal = performance.now();
+    // Zero out accumulated gyro drift so every pitch starts from the stance.
+    recenterBat();
+    activeLaunch = null;
+    resetTrail();
     ball.visible = false;
     hitBall.visible = false;
     outcomeLabel.textContent = 'Pitch incoming';
@@ -447,30 +1798,24 @@ ws.onmessage = function(evt){
     distanceReadout.textContent = '---';
     distanceReadout.style.color = '#FAC775';
     detailLabel.textContent = state.currentZone.tier + ' pitch — swing when ready';
-    requestAnimationFrame(tickPitch);
+    updateHud(state.currentZone, null, null, false, state.pitchTarget);
   } else if (msg.type === 'result'){
-    if (msg.offset_ms === 999999){
-      showResult(0, 999999);
-    } else {
-      showResult(msg.peak_gyro, msg.offset_ms);
-    }
+    if (msg.offset_ms === 999999){ showResult(0, 999999); }
+    else { showResult(msg.peak_gyro, msg.offset_ms); }
   }
 };
 
 resizeRenderer();
 highlightZone(state.currentZone);
-render();
+animate();
 
 document.getElementById('btn-fullscreen').onclick = function(){
-  if (!document.fullscreenElement){
-    document.documentElement.requestFullscreen().catch(function(){});
-  } else {
-    document.exitFullscreen();
-  }
+  if (!document.fullscreenElement){ document.documentElement.requestFullscreen().catch(function(){}); }
+  else { document.exitFullscreen(); }
 };
 document.addEventListener('fullscreenchange', function(){
   document.body.classList.toggle('fs-mode', !!document.fullscreenElement);
-  setTimeout(function(){ resizeRenderer(); render(); }, 60);
+  setTimeout(resizeRenderer, 60);
 });
 </script>
 </body>
